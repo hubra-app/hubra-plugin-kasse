@@ -1,22 +1,21 @@
 import { registerPlugin } from '@hubra/plugin-sdk'
-import { IconNote } from '@tabler/icons-react'
-import { NotesScreen } from './NotesScreen'
+import { IconReceipt } from '@tabler/icons-react'
+import { KasseScreen } from './KasseScreen'
+import { OrderScreen } from './OrderScreen'
+import { TabCard } from './TabCard'
 import translations from './translations.json'
 
-// Everything here shows only while the module is on for the club and the
-// person has `perm`. Other places to add things: `tabs` (a tab on a built-in
-// screen) and `slots` (account.cards, inventory.item, settings.module.actions).
 registerPlugin({
-  id: 'example',
+  id: 'kasse',
+  // Every member hands in claims, ticks and orders; the API decides the rest.
   routes: [
-    {
-      path: 'example',
-      module: 'example',
-      perm: 'example.notes.read',
-      component: NotesScreen,
-    },
+    { path: 'kasse', module: 'kasse', component: KasseScreen },
+    { path: 'kasse/tab', module: 'kasse', component: KasseScreen },
+    { path: 'kasse/orders', module: 'kasse', component: KasseScreen },
+    { path: 'kasse/orders/:id', module: 'kasse', component: OrderScreen },
   ],
-  // The nav entry in hubra_example/__init__.py names this icon.
-  icons: { note: IconNote },
+  slots: [{ slot: 'account.cards', module: 'kasse', component: TabCard }],
+  // The nav entry in hubra_kasse/__init__.py names this icon.
+  icons: { receipt: IconReceipt },
   translations,
 })

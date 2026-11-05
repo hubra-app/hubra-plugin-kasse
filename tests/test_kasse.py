@@ -1,0 +1,330 @@
+"""The Kasse plugin: expense claims, the tab and collective orders.
+
+Runs with Hubra's fixtures once the plugin is in plugins/kasse of a Hubra
+checkout (see README.md).
+"""
+
+from __future__ import annotations
+
+import io
+from datetime import date, timedelta
+
+import pytest
+from sqlalchemy import select
+
+from tests.helpers import set_modules
+from tests.settings.test_settings_kv import _login, _make_role_and_member
+
+BASE = "/api/v1/app/kasse"
+TREASURER = [
+    "kasse.claims.read",
+    "kasse.claims.update",
+    "kasse.tab.update",
+    "kasse.orders.update",
+]
+# A valid Swiss IBAN (check digits correct).
+IBAN = "CH93 0076 2011 6238 5295 7"
+PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+
+
+@pytest.fixture
+def club(client, app, db, seeded_db):
+    """Kim the treasurer, Max and Mia (ordinary members), a category."""
+    from hubra.core.models.finance import TransactionCategory
+
+    set_modules(True, "kasse")
+    app.test_cli_runner().invoke(args=["sync-permissions"])
+    tier = seeded_db["tier"]
+    kim = _make_role_and_member(db, tier, name="Kim", permission_keys=TREASURER)
+    max_ = _make_role_and_member(db, tier, name="Max")
+    mia = _make_role_and_member(db, tier, name="Mia")
+    cat = TransactionCategory(name="Kasse")
+    db.session.add(cat)
+    db.session.commit()
+    return {"kim": kim.id, "max": max_.id, "mia": mia.id, "cat": cat.id}
+
+
+def _bell(db, member_id):
+    from hubra.core.models.notification import Notification
+
+    return [
+        n.title
+        for n in db.session.scalars(
+            select(Notification).where(Notification.member_id == member_id)
+        )
+    ]
+
+
+def _claim(client, **fields):
+    form = {"title": "Kreide", "amount": "23.50", "spentOn": "2026-10-01"}
+    form.update(fields)
+    form["receipt"] = (io.BytesIO(PNG), "quittung.png", "image/png")
+    return client.post(f"{BASE}/claims", data=form, content_type="multipart/form-data")
+
+
+# ── Expense claims ───────────────────────────────────────────────────────────
+
+
+def test_a_claim_goes_from_receipt_to_booked_expense(client, db, club):
+    from hubra.core.models.finance import Transaction
+
+    _login(client, "max@test.ch")
+    res = _claim(client, iban=IBAN)
+    assert res.status_code == 201, res.get_json()
+    claim = res.get_json()
+    assert claim["status"] == "submitted"
+    assert claim["hasReceipt"] and claim["iban"] == IBAN.replace(" ", "")
+    assert client.get(f"{BASE}/claims/{claim['id']}/receipt").data == PNG
+    # Max can't approve his own claim, nor see everyone's.
+    assert (
+        client.post(
+            f"{BASE}/claims/{claim['id']}/decide", json={"approve": True}
+        ).status_code
+        == 403
+    )
+    assert client.get(f"{BASE}/claims/all").status_code == 403
+
+    # Mia can't see it or its receipt.
+    _login(client, "mia@test.ch")
+    assert client.get(f"{BASE}/claims").get_json() == []
+    assert client.get(f"{BASE}/claims/{claim['id']}/receipt").status_code == 404
+
+    _login(client, "kim@test.ch")
+    assert [c["id"] for c in client.get(f"{BASE}/claims/all").get_json()] == [
+        claim["id"]
+    ]
+    assert client.get(f"{BASE}/claims/{claim['id']}/receipt").data == PNG
+    # Paying comes after approving; rejecting needs a reason.
+    assert client.post(f"{BASE}/claims/{claim['id']}/pay", json={}).status_code == 409
+    assert (
+        client.post(
+            f"{BASE}/claims/{claim['id']}/decide", json={"approve": False}
+        ).status_code
+        == 400
+    )
+    ok = client.post(f"{BASE}/claims/{claim['id']}/decide", json={"approve": True})
+    assert ok.get_json()["status"] == "approved"
+    paid = client.post(
+        f"{BASE}/claims/{claim['id']}/pay", json={"categoryId": club["cat"]}
+    )
+    assert paid.status_code == 200, paid.get_json()
+    body = paid.get_json()
+    assert body["status"] == "paid" and body["transactionId"]
+
+    tx = db.session.get(Transaction, body["transactionId"])
+    assert tx.type == "expense" and float(tx.amount) == -23.5
+    assert tx.member_id == club["max"] and tx.method == "IBAN"
+    assert tx.category_id == club["cat"]
+    assert any("genehmigt" in t for t in _bell(db, club["max"]))
+    assert any("ausbezahlt" in t for t in _bell(db, club["max"]))
+    # A paid claim stays.
+    assert client.delete(f"{BASE}/claims/{claim['id']}").status_code == 409
+
+
+def test_a_claim_checks_its_input(client, club):
+    _login(client, "max@test.ch")
+    assert _claim(client, amount="0").status_code == 400
+    assert _claim(client, iban="CH93 0076 2011 6238 5295 8").status_code == 400
+    future = (date.today() + timedelta(days=3)).isoformat()
+    assert _claim(client, spentOn=future).status_code == 400
+    bad = client.post(
+        f"{BASE}/claims",
+        data={
+            "title": "x",
+            "amount": "5",
+            "receipt": (io.BytesIO(b"MZ"), "a.exe", "application/x-msdownload"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert bad.status_code == 400
+    # Without a receipt is fine; the owner can withdraw it while undecided.
+    plain = client.post(f"{BASE}/claims", json={"title": "Zug", "amount": "12.40"})
+    assert plain.status_code == 201
+    assert client.delete(f"{BASE}/claims/{plain.get_json()['id']}").status_code == 204
+
+
+# ── The tab ──────────────────────────────────────────────────────────────────
+
+
+def test_the_tab_is_ticked_and_settled_into_invoices(client, db, club):
+    from hubra.core.models.finance import Invoice
+
+    _login(client, "kim@test.ch")
+    beer = client.post(
+        f"{BASE}/products", json={"name": "Bier", "price": "4.00"}
+    ).get_json()
+    water = client.post(
+        f"{BASE}/products", json={"name": "Wasser", "price": "2.50"}
+    ).get_json()
+
+    _login(client, "max@test.ch")
+    assert (
+        client.post(f"{BASE}/products", json={"name": "x", "price": 1}).status_code
+        == 403
+    )
+    client.post(f"{BASE}/tab", json={"productId": beer["id"], "qty": 2})
+    tab = client.post(f"{BASE}/tab", json={"productId": water["id"]}).get_json()
+    assert tab["total"] == 10.5 and len(tab["ticks"]) == 2
+    assert all(t["canUndo"] for t in tab["ticks"])
+    # Max can't tick on someone else's tab.
+    other = client.post(
+        f"{BASE}/tab", json={"productId": beer["id"], "memberId": club["mia"]}
+    )
+    assert other.status_code == 403
+    # A price change later doesn't change what was ticked.
+    _login(client, "kim@test.ch")
+    client.patch(f"{BASE}/products/{beer['id']}", json={"price": "5.00"})
+    client.post(f"{BASE}/tab", json={"productId": beer["id"], "memberId": club["mia"]})
+
+    _login(client, "mia@test.ch")
+    mine = client.get(f"{BASE}/tab").get_json()
+    assert mine["total"] == 5.0
+    # Mia can't take back Max's tick.
+    max_tick = tab["ticks"][0]["id"]
+    assert client.delete(f"{BASE}/tab/{max_tick}").status_code == 403
+
+    _login(client, "kim@test.ch")
+    totals = client.get(f"{BASE}/tab/members").get_json()["members"]
+    assert {(r["memberName"], r["total"]) for r in totals} == {
+        ("Test Max", 10.5),
+        ("Test Mia", 5.0),
+    }
+    done = client.post(
+        f"{BASE}/tab/settle", json={"categoryId": club["cat"], "dueDays": 20}
+    ).get_json()
+    assert done == {"invoices": 2, "total": 15.5}
+    invoices = db.session.scalars(
+        select(Invoice).where(Invoice.purpose == "other")
+    ).all()
+    assert sorted(float(i.amount) for i in invoices) == [5.0, 10.5]
+    assert all((i.due - i.issued).days == 20 for i in invoices)
+    assert client.get(f"{BASE}/tab/members").get_json()["members"] == []
+    # A settled tick can't be taken back, and settling again bills nothing.
+    assert client.delete(f"{BASE}/tab/{max_tick}").status_code == 409
+    assert client.post(f"{BASE}/tab/settle", json={}).get_json()["invoices"] == 0
+
+
+# ── Collective orders ────────────────────────────────────────────────────────
+
+
+def _order(client, **fields):
+    body = {
+        "title": "Trainingsanzug 2027",
+        "deadline": (date.today() + timedelta(days=14)).isoformat(),
+        "supplier": "Sport Muster AG",
+        "items": [
+            {"name": "Jacke", "price": "65.00", "sizes": "S, M, L"},
+            {"name": "Mütze", "price": "15.00"},
+        ],
+    }
+    body.update(fields)
+    return client.post(f"{BASE}/orders", json=body)
+
+
+def test_a_collective_order_runs_to_the_supplier_list_and_invoices(client, db, club):
+    from hubra.core.models.finance import Invoice
+
+    _login(client, "kim@test.ch")
+    order = _order(client).get_json()
+    jacket, cap = order["items"]
+    assert jacket["sizes"] == ["S", "M", "L"] and cap["sizes"] == []
+
+    _login(client, "max@test.ch")
+    url = f"{BASE}/orders/{order['id']}/mine"
+    assert (
+        client.put(
+            url, json={"lines": [{"itemId": jacket["id"], "qty": 1}]}
+        ).status_code
+        == 400
+    )
+    mine = client.put(
+        url,
+        json={
+            "lines": [
+                {"itemId": jacket["id"], "size": "M", "qty": 1},
+                {"itemId": cap["id"], "qty": 2},
+            ]
+        },
+    ).get_json()
+    assert mine["myTotal"] == 95.0 and len(mine["mine"]) == 2
+    assert "lines" not in mine  # only the board sees everyone's
+    _login(client, "mia@test.ch")
+    client.put(url, json={"lines": [{"itemId": jacket["id"], "size": "M", "qty": 1}]})
+
+    _login(client, "kim@test.ch")
+    # The price of something ordered can't change, nor can it be removed.
+    changed = client.patch(
+        f"{BASE}/orders/{order['id']}",
+        json={
+            "items": [
+                {
+                    "id": jacket["id"],
+                    "name": "Jacke",
+                    "price": "70",
+                    "sizes": "S, M, L",
+                },
+                {"id": cap["id"], "name": "Mütze", "price": "15"},
+            ]
+        },
+    )
+    assert changed.status_code == 400
+    full = client.get(f"{BASE}/orders/{order['id']}").get_json()
+    assert full["summary"] == [
+        {"itemId": jacket["id"], "itemName": "Jacke", "size": "M", "qty": 2},
+        {"itemId": cap["id"], "itemName": "Mütze", "size": None, "qty": 2},
+    ]
+    assert client.post(f"{BASE}/orders/{order['id']}/bill", json={}).status_code == 409
+    client.post(f"{BASE}/orders/{order['id']}/close", json={})
+
+    _login(client, "max@test.ch")
+    assert client.put(url, json={"lines": []}).status_code == 409
+
+    _login(client, "kim@test.ch")
+    csv = client.get(f"{BASE}/orders/{order['id']}/list.csv").data.decode("utf-8-sig")
+    assert "Jacke;M;2" in csv and "Test Max;Mütze;;2;15.00;30.00" in csv
+    billed = client.post(
+        f"{BASE}/orders/{order['id']}/bill", json={"categoryId": club["cat"]}
+    ).get_json()
+    assert billed["invoices"] == 2 and billed["order"]["status"] == "billed"
+    amounts = sorted(
+        float(i.amount)
+        for i in db.session.scalars(
+            select(Invoice).where(Invoice.description == "Trainingsanzug 2027")
+        )
+    )
+    assert amounts == [65.0, 95.0]
+    assert client.delete(f"{BASE}/orders/{order['id']}").status_code == 409
+
+
+def test_an_order_past_its_deadline_takes_no_orders(client, club):
+    _login(client, "kim@test.ch")
+    past = (date.today() - timedelta(days=1)).isoformat()
+    order = _order(client, deadline=past).get_json()
+    assert order["open"] is False
+    _login(client, "max@test.ch")
+    item = order["items"][1]["id"]
+    res = client.put(
+        f"{BASE}/orders/{order['id']}/mine",
+        json={"lines": [{"itemId": item, "qty": 1}]},
+    )
+    assert res.status_code == 409
+    _login(client, "kim@test.ch")
+    assert (
+        client.post(
+            f"{BASE}/orders/{order['id']}/close", json={"reopen": True}
+        ).status_code
+        == 400
+    )
+
+
+def test_the_fridge_sheet_has_a_code_per_product(client, club):
+    _login(client, "kim@test.ch")
+    client.post(f"{BASE}/products", json={"name": "Bier", "price": "4.00"})
+    bad = client.get(f"{BASE}/products/qr.pdf?link=javascript:alert(1)")
+    assert bad.status_code == 400
+    res = client.get(
+        f"{BASE}/products/qr.pdf?link=https://demo.hubra.club/app/kasse/tab?tick="
+    )
+    assert res.status_code == 200 and res.data.startswith(b"%PDF")
+    _login(client, "max@test.ch")
+    assert client.get(f"{BASE}/products/qr.pdf?link=https://x/").status_code == 403
