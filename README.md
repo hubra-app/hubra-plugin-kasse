@@ -44,5 +44,17 @@ Bump `version` in `plugin.yaml`, add a `## <version>` section to
 workflow tests the plugin and builds its frontend; a separate job in the
 `plugin-signing` environment, the only one with the `HUBRA_SIGNING_KEY`
 secret, signs it; then `kasse-<version>.zip` is attached to the release. Files listed in `.releaseignore` stay out of the zip.
+`CHANGELOG.md` and merge. Then tag the merged commit on main and push the tag:
+
+```sh
+git switch main && git pull
+git tag v<version> && git push origin v<version>
+```
+
+The workflow tests the plugin and builds its frontend, the `plugin-signing`
+job signs it after your approval, and only then is the GitHub release
+`v<version>` published, with `<id>-<version>.zip` and its `.sha256` attached. Files
+listed in `.releaseignore` stay out of the zip. Releases are immutable, so a
+published version never changes: fix a bad one with a new version. The template itself is never signed.
 
 Source: <https://github.com/hubra-app/hubra-plugin-kasse>
