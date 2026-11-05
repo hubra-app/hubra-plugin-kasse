@@ -1,5 +1,11 @@
 # Kasse
 
+## Unreleased
+
+- Paying an expense claim works again on Hubra with the books moved into the
+  Finances plugin. The expense is written to the transactions table directly
+  instead of through a finance service that core no longer has.
+
 ## 1.0.0
 
 First version. Money between members and the club outside the membership fee:

@@ -500,7 +500,8 @@ def decide_claim(claim_id: int):
 @kasse_bp.post("/claims/<int:claim_id>/pay")
 @permission_required("claims", "update", "Approve, reject and pay expense claims")
 def pay_claim(claim_id: int):
-    from hubra.api.finance.services import TransactionsService
+    from hubra.core.models.finance import Transaction
+    from hubra.core.utils import log_audit
 
     member = get_current_member()
     claim, err = _get(KasseClaim, claim_id)
@@ -515,19 +516,22 @@ def pay_claim(claim_id: int):
     if method not in METHODS:
         raise Invalid(f"method must be one of {', '.join(METHODS)}")
     names = _names([claim.member_id])
-    tx = TransactionsService.create(
-        {
-            "date": _date(data, "paidOn") or date.today(),
-            "description": f"Spesen: {claim.title}"[:255],
-            "category_id": _category_id(data),
-            "member_id": claim.member_id,
-            "payee_name": names.get(claim.member_id or 0),
-            "amount": claim.amount,
-            "method": method,
-            "type": "expense",
-        },
-        member.id,
+    # The books' transactions table is core, so the expense is written there
+    # directly (plugins never import the Finances plugin). Expenses are
+    # stored negative, as the finance screens create them.
+    tx = Transaction(
+        date=_date(data, "paidOn") or date.today(),
+        description=f"Spesen: {claim.title}"[:255],
+        category_id=_category_id(data),
+        member_id=claim.member_id,
+        payee_name=names.get(claim.member_id or 0),
+        amount=-abs(claim.amount),
+        method=method,
+        type="expense",
     )
+    db.session.add(tx)
+    db.session.flush()
+    log_audit(member.id, "create_transaction", "Transaction", tx.id, tx.description)
     claim.status = "paid"
     claim.transaction_id = tx.id
     claim.paid_at = datetime.now(timezone.utc)
