@@ -45,4 +45,8 @@ module = Module(
         "kasse_order_items",
         "kasse_order_lines",
     ),
+    # Hubra's features it uses, through contracts (docs/contracts.md in hubra).
+    consumes={
+        "finance.invoice.create": ">=1,<2",
+    },
 )

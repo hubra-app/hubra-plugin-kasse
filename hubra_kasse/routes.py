@@ -760,22 +760,24 @@ def tab_members():
 def _invoice(
     member_id: int, amount: Decimal, text: str, data: dict, actor: int
 ) -> Invoice:
-    from hubra.api.finance.services import InvoicesService
+    from hubra.core.contracts import SYSTEM, call
 
     today = date.today()
     due = today + timedelta(days=_int(data, "dueDays", 0, 365, 30))
-    return InvoicesService.create(
-        {
-            "member_id": member_id,
-            "issued": today,
-            "due": due,
-            "amount": amount,
-            "purpose": "other",
-            "description": text[:512],
-            "category_id": _category_id(data),
-        },
-        actor,
+    # The till's own right was checked by the route; the invoice is its doing.
+    made = call(
+        "finance.invoice.create",
+        member_id=member_id,
+        issued=today,
+        due=due,
+        amount=amount,
+        purpose="other",
+        description=text[:512],
+        category_id=_category_id(data),
+        actor_id=actor,
+        actor=SYSTEM,
     )
+    return db.session.get(Invoice, made["id"])
 
 
 @kasse_bp.post("/tab/settle")
