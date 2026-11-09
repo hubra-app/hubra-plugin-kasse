@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Everyone's expense claims moved into Finanzen › Buchungen › Spesen
+  (`/app/finance/expenses`), where the treasurer approves and pays them. On
+  the Kasse page members still hand in and follow their own.
 - Paying an expense claim works again on Hubra with the books moved into the
   Finances plugin. The expense is written to the transactions table directly
   instead of through a finance service that core no longer has.
