@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ActionIcon, Badge, Button, FileInput, Group, Paper, Select, Stack, Text, TextInput, Textarea } from '@mantine/core'
+import { ActionIcon, Anchor, Badge, Button, FileInput, Group, Paper, Select, Stack, Text, TextInput, Textarea } from '@mantine/core'
 import { IconCheck, IconPaperclip, IconPlus, IconReceipt, IconShoppingBag, IconTrash, IconBeer, IconX, IconCash } from '@tabler/icons-react'
 import {
   ConfirmModal,
@@ -63,7 +63,7 @@ export function KasseScreen() {
         activeTab={active}
         onTabChange={(id) => navigate(id === 'claims' ? '/app/kasse' : `/app/kasse/${id}`)}
       />
-      {active === 'claims' && <ClaimsTab options={options.data} />}
+      {active === 'claims' && <ClaimsTab options={options.data} view="mine" />}
       {active === 'tab' && <TabTab options={options.data} />}
       {active === 'orders' && <OrdersTab options={options.data} />}
     </>
@@ -88,10 +88,15 @@ export function StatusBadge({ status }: { status: ClaimStatus }) {
   )
 }
 
-function ClaimsTab({ options }: { options: Options | undefined }) {
+/**
+ * The expense claims. On the Kasse page (`mine`) a member hands in and follows
+ * their own; in Finanzen (`club`) the treasurer approves and pays everyone's.
+ */
+function ClaimsTab({ options, view }: { options: Options | undefined; view: 'mine' | 'club' }) {
   const { t } = useT()
   const qc = useQueryClient()
-  const treasurer = !!options?.can.claimsRead
+  const navigate = useNavigate()
+  const treasurer = view === 'club' && !!options?.can.claimsRead
   const [show, setShow] = useState<'mine' | 'open' | 'all'>(treasurer ? 'open' : 'mine')
   const claims = useQuery({
     queryKey: QK.claims(show),
@@ -103,7 +108,8 @@ function ClaimsTab({ options }: { options: Options | undefined }) {
   const [deleting, setDeleting] = useState<Claim | null>(null)
   const { run } = useAction()
   const refresh = () => qc.invalidateQueries({ queryKey: QK.all })
-  const canDecide = !!options?.can.claims
+  // Approving and paying happen in Finanzen, with everyone's claims in view.
+  const canDecide = view === 'club' && !!options?.can.claims
   const total = (claims.data ?? []).filter((c) => c.status !== 'rejected' && c.status !== 'paid').reduce((s, c) => s + c.amount, 0)
 
   return (
@@ -114,7 +120,6 @@ function ClaimsTab({ options }: { options: Options | undefined }) {
             options={[
               { value: 'open', label: t('kasse.claims.open') },
               { value: 'all', label: t('kasse.claims.all') },
-              { value: 'mine', label: t('kasse.claims.mine') },
             ]}
             value={show}
             onChange={(v) => setShow(v as typeof show)}
@@ -124,10 +129,20 @@ function ClaimsTab({ options }: { options: Options | undefined }) {
             {t('kasse.claims.hint')}
           </Text>
         )}
-        <Button leftSection={<IconPlus size={16} />} onClick={() => setAdding(true)}>
-          {t('kasse.claims.new')}
-        </Button>
+        {view === 'mine' && (
+          <Button leftSection={<IconPlus size={16} />} onClick={() => setAdding(true)}>
+            {t('kasse.claims.new')}
+          </Button>
+        )}
       </Group>
+      {view === 'mine' && options?.can.claimsRead && (
+        <Text size="sm" c="dimmed">
+          {t('kasse.claims.inFinance')}{' '}
+          <Anchor component="button" size="sm" onClick={() => navigate('/app/finance/expenses')}>
+            {t('kasse.claims.openFinance')}
+          </Anchor>
+        </Text>
+      )}
       {show === 'open' && total > 0 && (
         <Text size="sm" c="dimmed">
           {t('kasse.claims.openTotal', { amount: chf(total) })}
@@ -396,4 +411,12 @@ function PayModal({
       <CategoryField value={categoryId} onChange={setCategoryId} options={options} hint={t('kasse.claims.categoryHint')} />
     </Modal>
   )
+}
+
+/** Everyone's expense claims, as a sub-tab of Finanzen › Buchungen (/app/finance/expenses). */
+export function ClaimsFinanceTab() {
+  const options = useQuery({ queryKey: QK.options, queryFn: getOptions })
+  if (options.isLoading) return <LoadingSpinner />
+  if (options.error) return <ErrorBanner message={errorText(options.error)} onRetry={() => options.refetch()} />
+  return <ClaimsTab options={options.data} view="club" />
 }

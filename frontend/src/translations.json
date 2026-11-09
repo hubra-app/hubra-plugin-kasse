@@ -37,6 +37,8 @@
       "categoryNone": "Default",
       "claims": {
         "hint": "Paid for something for the club? Take a photo of the receipt and hand it in.",
+        "inFinance": "You approve and pay everyone's claims under Finances › Bookings › Expenses.",
+        "openFinance": "Open",
         "open": "Open",
         "all": "All",
         "mine": "Mine",
@@ -209,6 +211,8 @@
       "categoryNone": "Standard",
       "claims": {
         "hint": "Etwas für den Verein bezahlt? Beleg fotografieren und einreichen.",
+        "inFinance": "Die Spesen aller Mitglieder genehmigst und zahlst du unter Finanzen › Buchungen › Spesen aus.",
+        "openFinance": "Öffnen",
         "open": "Offen",
         "all": "Alle",
         "mine": "Meine",
