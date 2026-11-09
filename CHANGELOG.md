@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Managing the tab's products, printing the QR sheet and settling the tab
+  moved into Finanzen › Rechnungen › Strichliste (`/app/finance/tab-settle`).
+  Members still tick on the Kasse page. Needs a Hubra with plugin sub-tabs
+  under Rechnungen; older versions show it as a page tab of its own.
 - Everyone's expense claims moved into Finanzen › Buchungen › Spesen
   (`/app/finance/expenses`), where the treasurer approves and pays them. On
   the Kasse page members still hand in and follow their own.

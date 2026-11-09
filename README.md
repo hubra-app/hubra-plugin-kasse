@@ -13,7 +13,7 @@ A plugin for [Hubra](https://hubra.club). Money between members and the club out
 | Tab | |
 | --- | --- |
 | Spesen | A member hands in an expense with a receipt on the Kasse page. The treasurer approves or rejects it, then pays it, in Finanzen › Buchungen › Spesen (`/app/finance/expenses`): that books an expense in Finanzen with the member and the chosen category. |
-| Strichliste | Products with a price; members tick them in the app or by scanning a code from the printed QR sheet. Settling creates one invoice per member for what is open. |
+| Strichliste | Products with a price; members tick them on the Kasse page or by scanning a code from the printed QR sheet. Products, the QR sheet and settling are in Finanzen › Rechnungen › Strichliste (`/app/finance/tab-settle`). Settling creates one invoice per member for what is open. |
 | Sammelbestellungen | Items with prices and sizes and an order deadline. Members order; the board gets the supplier list (CSV), closes the order and bills it, one invoice per member. |
 
 Invoices are ordinary Hubra invoices (purpose "other"), so they show on the

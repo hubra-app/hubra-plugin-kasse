@@ -88,6 +88,8 @@
       },
       "tab": {
         "hint": "Tap, and it goes on your tab.",
+        "inFinance": "You manage the products and settle the tab under Finances › Invoices › Tab.",
+        "settleHint": "What members ticked on the Kasse page. Settling puts each open amount on one invoice per member.",
         "qr": "Print QR codes",
         "noProducts": "Nothing on the tab yet",
         "noProductsHint": "Add drinks or materials with a price.",
@@ -262,6 +264,8 @@
       },
       "tab": {
         "hint": "Antippen, und es kommt auf deine Strichliste.",
+        "inFinance": "Produkte und Abrechnung findest du unter Finanzen › Rechnungen › Strichliste.",
+        "settleHint": "Was Mitglieder auf der Kasse-Seite angestrichen haben. Abrechnen stellt jedem Mitglied eine Rechnung über seinen offenen Betrag.",
         "qr": "QR-Codes drucken",
         "noProducts": "Noch nichts auf der Strichliste",
         "noProductsHint": "Getränke oder Material mit Preis erfassen.",
