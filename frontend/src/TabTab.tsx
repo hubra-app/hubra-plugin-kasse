@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ActionIcon, Badge, Button, Group, NumberInput, Paper, SimpleGrid, Stack, Switch, Table, Text, TextInput, Title, UnstyledButton } from '@mantine/core'
+import { ActionIcon, Anchor, Badge, Button, Group, NumberInput, Paper, SimpleGrid, Stack, Switch, Table, Text, TextInput, Title, UnstyledButton } from '@mantine/core'
 import { IconArrowBackUp, IconBeer, IconPencil, IconPlus, IconQrcode, IconReceipt2, IconTrash } from '@tabler/icons-react'
 import { ConfirmModal, EmptyState, ErrorBanner, Field, LoadingSpinner, Modal, useT } from '@hubra/plugin-sdk'
 import {
@@ -10,6 +10,7 @@ import {
   deleteProduct,
   errorText,
   formatDay,
+  getOptions,
   getTab,
   listProducts,
   openFile,
@@ -22,10 +23,26 @@ import {
 } from './api'
 import { CategoryField, chf, useAction } from './common'
 
-/** The tab (Strichliste): tick, see what's open, and for the treasurer settle it. */
+/** Opens the printable QR sheet; each code points at the Kasse page's tab. */
+function useQrSheet() {
+  const { i18n } = useT()
+  const { run } = useAction()
+  return () => {
+    const appRoot = window.location.origin + window.location.pathname.split('/app/')[0]
+    const link = `${appRoot}/app/kasse/tab?tick=`
+    const lang = i18n.language?.startsWith('en') ? 'en' : 'de'
+    return run(() => openFile(`/products/qr.pdf?inline=1&lang=${lang}&link=${encodeURIComponent(link)}`))
+  }
+}
+
+/**
+ * The tab (Strichliste) for every member: tick and see what's open. The
+ * treasurer manages products and settles it in Finanzen (TabSettleFinanceTab).
+ */
 export function TabTab({ options }: { options: Options | undefined }) {
-  const { t, i18n } = useT()
+  const { t } = useT()
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
   const products = useQuery({ queryKey: QK.products, queryFn: listProducts })
   const tab = useQuery({ queryKey: QK.tab, queryFn: getTab })
@@ -39,13 +56,6 @@ export function TabTab({ options }: { options: Options | undefined }) {
     const ok = await run(() => addTick(p.id), t('kasse.tab.ticked', { name: p.name }))
     if (ok) refresh()
     if (params.get('tick')) setParams({}, { replace: true })
-  }
-
-  const qrSheet = () => {
-    const appRoot = window.location.origin + window.location.pathname.split('/app/')[0]
-    const link = `${appRoot}/app/kasse/tab?tick=`
-    const lang = i18n.language?.startsWith('en') ? 'en' : 'de'
-    return run(() => openFile(`/products/qr.pdf?inline=1&lang=${lang}&link=${encodeURIComponent(link)}`))
   }
 
   if (products.error) return <ErrorBanner message={errorText(products.error)} onRetry={() => products.refetch()} />
@@ -79,12 +89,15 @@ export function TabTab({ options }: { options: Options | undefined }) {
           <Text size="sm" c="dimmed">
             {t('kasse.tab.hint')}
           </Text>
-          {manage && active.length > 0 && (
-            <Button variant="default" leftSection={<IconQrcode size={16} />} onClick={qrSheet}>
-              {t('kasse.tab.qr')}
-            </Button>
-          )}
         </Group>
+        {manage && (
+          <Text size="sm" c="dimmed" mb="xs">
+            {t('kasse.tab.inFinance')}{' '}
+            <Anchor component="button" size="sm" onClick={() => navigate('/app/finance/tab-settle')}>
+              {t('kasse.claims.openFinance')}
+            </Anchor>
+          </Text>
+        )}
         {active.length === 0 ? (
           <EmptyState icon={<IconBeer size={28} />} title={t('kasse.tab.noProducts')} description={manage ? t('kasse.tab.noProductsHint') : undefined} />
         ) : (
@@ -147,7 +160,36 @@ export function TabTab({ options }: { options: Options | undefined }) {
         )}
       </Paper>
 
-      {manage && <TabAdmin options={options} products={products.data ?? []} onChange={refresh} />}
+    </Stack>
+  )
+}
+
+/** Products, open amounts and settling, as a sub-tab of Finanzen › Rechnungen (/app/finance/tab-settle). */
+export function TabSettleFinanceTab() {
+  const { t } = useT()
+  const qc = useQueryClient()
+  const qrSheet = useQrSheet()
+  const options = useQuery({ queryKey: QK.options, queryFn: getOptions })
+  const products = useQuery({ queryKey: QK.products, queryFn: listProducts })
+  const refresh = () => qc.invalidateQueries({ queryKey: QK.all })
+
+  const error = options.error ?? products.error
+  if (error) return <ErrorBanner message={errorText(error)} onRetry={() => (options.error ? options.refetch() : products.refetch())} />
+  if (options.isLoading || products.isLoading) return <LoadingSpinner />
+
+  return (
+    <Stack gap="lg">
+      <Group justify="space-between" wrap="wrap">
+        <Text size="sm" c="dimmed">
+          {t('kasse.tab.settleHint')}
+        </Text>
+        {(products.data ?? []).some((p) => p.active) && (
+          <Button variant="default" leftSection={<IconQrcode size={16} />} onClick={qrSheet}>
+            {t('kasse.tab.qr')}
+          </Button>
+        )}
+      </Group>
+      <TabAdmin options={options.data} products={products.data ?? []} onChange={refresh} />
     </Stack>
   )
 }

@@ -3,6 +3,7 @@ import { IconReceipt } from '@tabler/icons-react'
 import { ClaimsFinanceTab, KasseScreen } from './KasseScreen'
 import { OrderScreen } from './OrderScreen'
 import { TabCard } from './TabCard'
+import { TabSettleFinanceTab } from './TabTab'
 import translations from './translations.json'
 
 registerPlugin({
@@ -25,6 +26,16 @@ registerPlugin({
       perm: 'kasse.claims.read',
       group: 'bookings',
       component: ClaimsFinanceTab,
+    },
+    // Products, open amounts and settling the tab, which makes the invoices.
+    {
+      screen: 'finance',
+      id: 'tab-settle',
+      label: 'kasse.tabs.tab',
+      module: 'kasse',
+      perm: 'kasse.tab.update',
+      group: 'invoices',
+      component: TabSettleFinanceTab,
     },
   ],
   slots: [{ slot: 'account.cards', module: 'kasse', component: TabCard }],
