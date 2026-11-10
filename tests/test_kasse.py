@@ -362,3 +362,88 @@ def test_widgets(db, club):
     # Claims need the right to read them; the tab is every member's own.
     offered = [o.contract.name for o in contracts.widgets(actor=max_)]
     assert "kasse.tab" in offered and "kasse.claims" not in offered
+
+
+def test_the_tab_settings_are_the_settle_defaults(client, db, club, monkeypatch):
+    from hubra.core.models.finance import Invoice
+
+    # Module settings are kept per club; a plain dict stands in for one here.
+    stored: dict = {}
+    monkeypatch.setattr("hubra.core.modules.get_config", lambda code: dict(stored))
+    monkeypatch.setattr("hubra.core.modules.set_config", lambda code, c: stored.update(c))
+
+    _login(client, "max@test.ch")
+    assert client.get(f"{BASE}/tab/settings").status_code == 403
+    _login(client, "kim@test.ch")
+    assert client.get(f"{BASE}/tab/settings").get_json() == {"categoryId": None, "dueDays": 30}
+    assert client.put(f"{BASE}/tab/settings", json={"categoryId": 99999}).status_code == 400
+    got = client.put(
+        f"{BASE}/tab/settings", json={"categoryId": club["cat"], "dueDays": 10}
+    ).get_json()
+    assert got == {"categoryId": club["cat"], "dueDays": 10}
+    beer = client.post(f"{BASE}/products", json={"name": "Bier", "price": "4.00"}).get_json()
+    client.post(f"{BASE}/tab", json={"productId": beer["id"]})
+    assert client.post(f"{BASE}/tab/settle", json={"categoryId": None}).get_json()["invoices"] == 1
+    invoice = db.session.scalars(select(Invoice).where(Invoice.purpose == "other")).one()
+    assert (invoice.due - invoice.issued).days == 10
+
+
+# ── Products as consumables in Inventory ─────────────────────────────────────
+
+
+def test_products_are_consumables_in_inventory(client, db, club):
+    """Through Inventory's contracts only; skipped where Inventory isn't installed."""
+    from hubra.core.contracts import SYSTEM, available, query
+
+    from hubra_kasse.items import link_missing, on_item_deleted, on_item_saved
+    from hubra_kasse.models import KasseProduct
+
+    def item(item_id):
+        return query("inventory.items.get", ids=[item_id], actor=SYSTEM)[0]
+
+    set_modules(False, "inventory")
+    _login(client, "kim@test.ch")
+    # Without Inventory the tab works as before; the product has no item.
+    old = client.post(f"{BASE}/products", json={"name": "Mate", "price": "3.00"}).get_json()
+    assert old["itemId"] is None and old["stock"] is None
+
+    set_modules(True, "inventory")
+    if not available("inventory.stock.adjust"):
+        pytest.skip("needs the Inventory plugin with stock counts")
+    beer = client.post(
+        f"{BASE}/products",
+        json={"name": "Bier", "price": "4.00", "stock": 12, "minStock": 3, "unit": "Flaschen"},
+    ).get_json()
+    got = item(beer["itemId"])
+    assert (got["name"], got["category"], got["stock"], got["min_stock"], got["unit"]) == (
+        "Bier", "Consumable", 12, 3, "Flaschen",
+    )
+    assert (beer["stock"], beer["minStock"], beer["lowStock"]) == (12, 3, False)
+
+    # A tick takes from the stock, a tick taken back puts it back.
+    _login(client, "max@test.ch")
+    tab = client.post(f"{BASE}/tab", json={"productId": beer["id"], "qty": 9}).get_json()
+    assert item(beer["itemId"])["stock"] == 3
+    client.delete(f"{BASE}/tab/{tab['ticks'][0]['id']}")
+    assert item(beer["itemId"])["stock"] == 12
+
+    # Renamed here goes there; a count by hand; renamed there comes back.
+    _login(client, "kim@test.ch")
+    client.patch(f"{BASE}/products/{beer['id']}", json={"name": "Lager", "stock": 2})
+    assert (item(beer["itemId"])["name"], item(beer["itemId"])["stock"]) == ("Lager", 2)
+    listed = {p["name"]: p for p in client.get(f"{BASE}/products").get_json()}
+    assert listed["Lager"]["lowStock"] is True
+    from hubra.core.contracts import call
+
+    call("inventory.items.save", item_id=beer["itemId"], name="Lager hell", actor=SYSTEM)
+    on_item_saved(item_id=beer["itemId"])
+    assert db.session.get(KasseProduct, beer["id"]).name == "Lager hell"
+
+    # Products from before get their item from the job.
+    assert link_missing() == 1
+    assert item(db.session.get(KasseProduct, old["id"]).item_id)["category"] == "Consumable"
+
+    # Deleted in Inventory: off the tab.
+    on_item_deleted(item_id=beer["itemId"])
+    product = db.session.get(KasseProduct, beer["id"])
+    assert product.item_id is None and product.active is False

@@ -35,6 +35,18 @@ export interface Product {
   price: number
   position: number
   active: boolean
+  /** Its consumable in Inventory and the stock there; null without one. */
+  itemId: number | null
+  stock: number | null
+  minStock: number | null
+  unit: string | null
+  lowStock: boolean
+}
+
+/** The Strichliste's settings: the defaults for settling. */
+export interface TabSettings {
+  categoryId: number | null
+  dueDays: number
 }
 
 export interface Tick {
@@ -114,6 +126,7 @@ export const QK = {
   products: ['kasse', 'products'] as const,
   tab: ['kasse', 'tab'] as const,
   tabMembers: ['kasse', 'tab-members'] as const,
+  tabSettings: ['kasse', 'tab-settings'] as const,
   orders: ['kasse', 'orders'] as const,
   order: (id: number) => ['kasse', 'order', id] as const,
 }
@@ -147,6 +160,10 @@ export const undoTick = (id: number) => apiFetch<Tab>(`${BASE}/tab/${id}`, { met
 export const tabMembers = () => apiFetch<{ members: TabMember[]; lastSettled: string | null }>(`${BASE}/tab/members`)
 export const settleTab = (body: { categoryId?: number | null; dueDays?: number }) =>
   apiFetch<{ invoices: number; total: number }>(`${BASE}/tab/settle`, json('POST', body))
+
+export const getTabSettings = () => apiFetch<TabSettings>(`${BASE}/tab/settings`)
+export const saveTabSettings = (body: Partial<TabSettings>) =>
+  apiFetch<TabSettings>(`${BASE}/tab/settings`, json('PUT', body))
 
 export const listOrders = () => apiFetch<Order[]>(`${BASE}/orders`)
 export const getOrder = (id: number) => apiFetch<Order>(`${BASE}/orders/${id}`)
