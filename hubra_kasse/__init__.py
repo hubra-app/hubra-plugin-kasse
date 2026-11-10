@@ -23,6 +23,9 @@ from hubra.core.modules import Blueprint, Module, NavItem
 
 module = Module(
     code="kasse",
+    # Access the standard roles get when a club first switches it on
+    # (docs/roles.md in hubra-app/hubra).
+    role_defaults={"member": "view", "treasurer": "all"},
     name="Kasse",
     description="Expense claims, the drinks tab and collective orders",
     default_enabled=False,
