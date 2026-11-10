@@ -6,6 +6,7 @@
 
 ## Unreleased
 
+- Dashboard widgets: **Meine Strichliste** (what the member has on the tab and isn't billed yet) and **Offene Spesen** (claims not paid out yet, with their total; needs `kasse.claims.read`).
 - Managing the tab's products, printing the QR sheet and settling the tab
   moved into Finanzen › Rechnungen › Strichliste (`/app/finance/tab-settle`).
   Members still tick on the Kasse page. Needs a Hubra with plugin sub-tabs
