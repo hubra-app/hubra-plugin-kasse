@@ -172,6 +172,12 @@
         "billedToast_other": "{{count}} invoices created",
         "deleteTitle": "Delete this collective order?",
         "deleteBody": "{{title}} and every order in it are deleted."
+      },
+      "widget": {
+        "tab": "My tab",
+        "tabHint": "What you have on the tab that is not billed yet",
+        "claims": "Open expense claims",
+        "claimsHint": "Expense claims not paid out yet, with their total"
       }
     }
   },
@@ -348,6 +354,12 @@
         "billedToast_other": "{{count}} Rechnungen erstellt",
         "deleteTitle": "Sammelbestellung löschen?",
         "deleteBody": "{{title}} und alle Bestellungen darin werden gelöscht."
+      },
+      "widget": {
+        "tab": "Meine Strichliste",
+        "tabHint": "Was du auf der Strichliste hast und noch nicht verrechnet ist",
+        "claims": "Offene Spesen",
+        "claimsHint": "Spesen, die noch nicht ausbezahlt sind, mit Betrag"
       }
     }
   }

@@ -328,3 +328,37 @@ def test_the_fridge_sheet_has_a_code_per_product(client, club):
     assert res.status_code == 200 and res.data.startswith(b"%PDF")
     _login(client, "max@test.ch")
     assert client.get(f"{BASE}/products/qr.pdf?link=https://x/").status_code == 403
+
+
+# ── Dashboard widgets ───────────────────────────────────────────────────────
+
+
+def test_widgets(db, club):
+    from decimal import Decimal
+
+    from hubra.core import contracts
+    from hubra.core.models.member import Member
+    from hubra_kasse.models import KasseClaim, KasseTick
+
+    max_ = db.session.get(Member, club["max"])
+    db.session.add_all([
+        KasseTick(member_id=club["max"], name="Bier", price=Decimal("4.50"), qty=2),
+        KasseTick(member_id=club["max"], name="Wasser", price=Decimal("2.00"), qty=1),
+        KasseTick(member_id=club["mia"], name="Bier", price=Decimal("4.50"), qty=1),
+        KasseClaim(member_id=club["max"], title="Kreide", amount=Decimal("23.50"),
+                   spent_on=date(2026, 10, 1), status="submitted"),
+        KasseClaim(member_id=club["mia"], title="Bälle", amount=Decimal("1200.00"),
+                   spent_on=date(2026, 10, 2), status="approved"),
+        KasseClaim(member_id=club["mia"], title="Alt", amount=Decimal("5.00"),
+                   spent_on=date(2026, 9, 2), status="paid"),
+    ])
+    db.session.commit()
+
+    tab = contracts.widget_data("kasse.tab", {}, actor=max_)
+    assert tab["value"] == "CHF 11.00" and tab["sub"] in ("2 Striche", "2 ticks")
+    claims = contracts.widget_data("kasse.claims", {}, actor=contracts.SYSTEM)
+    assert claims["value"] == 2 and claims["sub"] == "CHF 1'223.50"
+
+    # Claims need the right to read them; the tab is every member's own.
+    offered = [o.contract.name for o in contracts.widgets(actor=max_)]
+    assert "kasse.tab" in offered and "kasse.claims" not in offered

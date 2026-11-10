@@ -19,6 +19,7 @@ Permissions:
     kasse.orders.update    run collective orders
 """
 
+from hubra.core.contracts import widget_contract
 from hubra.core.modules import Blueprint, Module, NavItem
 
 module = Module(
@@ -52,4 +53,24 @@ module = Module(
     consumes={
         "finance.invoice.create": ">=1,<2",
     },
+    # Dashboard widgets (hubra_kasse/widgets.py).
+    provides=(
+        widget_contract(
+            "kasse.tab",
+            "hubra_kasse.widgets:tab",
+            label="kasse.widget.tab",
+            description="kasse.widget.tabHint",
+            size="s",
+            view="stat",
+        ),
+        widget_contract(
+            "kasse.claims",
+            "hubra_kasse.widgets:claims",
+            label="kasse.widget.claims",
+            description="kasse.widget.claimsHint",
+            size="s",
+            view="stat",
+            perm="kasse.claims.read",
+        ),
+    ),
 )
