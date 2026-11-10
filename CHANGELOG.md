@@ -1,15 +1,12 @@
 # Kasse
 
-## Unreleased
-
-- Dashboard widgets: **Meine Strichliste** (what the member has on the tab and isn't billed yet) and **Offene Spesen** (claims not paid out yet, with their total; needs `kasse.claims.read`).
-
 ## 1.1.0
 
 - Gives the standard roles access when a club first switches it on (`role_defaults`, docs/roles.md in hubra-app/hubra): Mitglied Ansehen, Kassier/in Alles. Roles without access don't see it; their own data from it stays on their profile. Needs Hubra 0.2.5 or later.
 
 ## Unreleased
 
+- Dashboard widgets: **Meine Strichliste** (what the member has on the tab and isn't billed yet) and **Offene Spesen** (claims not paid out yet, with their total; needs `kasse.claims.read`).
 - Managing the tab's products, printing the QR sheet and settling the tab
   moved into Finanzen › Rechnungen › Strichliste (`/app/finance/tab-settle`).
   Members still tick on the Kasse page. Needs a Hubra with plugin sub-tabs
