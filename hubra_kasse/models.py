@@ -75,6 +75,9 @@ class KasseProduct(db.Model):
     price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Its consumable in Inventory, which counts the stock (hubra_kasse.items).
+    # No foreign key: Inventory's table is reached only through contracts.
+    item_id: Mapped[int | None] = mapped_column(Integer, index=True)
 
 
 class KasseTick(db.Model):

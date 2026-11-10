@@ -9,8 +9,9 @@ DELETE /claims/<id>                   owner while submitted, or treasurer
 POST   /claims/<id>/decide            {approve, note?}
 POST   /claims/<id>/pay               {categoryId?, method?, paidOn?}: books the expense
 GET    /products                      what can go on the tab
-POST   /products                      {name, price}
-PATCH  /products/<id>                 {name?, price?, active?, position?}
+POST   /products                      {name, price, stock?, minStock?, unit?}
+PATCH  /products/<id>                 {name?, price?, active?, position?, stock?, minStock?, unit?}
+                                      (stock fields go to the product's item in Inventory)
 DELETE /products/<id>
 GET    /products/qr.pdf?link=         the codes for the fridge
 GET    /tab                           the caller's open ticks and total
@@ -18,6 +19,8 @@ POST   /tab                           {productId, qty?, memberId? (treasurer)}
 DELETE /tab/<id>                      own tick within 15 minutes, or treasurer
 GET    /tab/members                   open totals per member (treasurer)
 POST   /tab/settle                    {categoryId?, dueDays?}: one invoice per member
+GET    /tab/settings                  the Strichliste's settings (category, due days)
+PUT    /tab/settings                  {categoryId?, dueDays?}
 GET    /orders                        collective orders
 POST   /orders                        {title, deadline, description?, supplier?, items}
 GET    /orders/<id>                   with the caller's lines; all lines for the board
@@ -61,6 +64,7 @@ from .models import (
     KasseProduct,
     KasseTick,
 )
+from . import items as inventory
 from .notify import notify
 
 kasse_bp = Blueprint("kasse_bp", __name__)
@@ -239,13 +243,21 @@ def _claim(c: KasseClaim, names: dict) -> dict:
     }
 
 
-def _product(p: KasseProduct) -> dict:
+def _product(p: KasseProduct, items: dict | None = None) -> dict:
+    """``items``: the products' inventory items by id (``inventory.stock_of``)."""
+    item = (items or {}).get(p.item_id) if p.item_id is not None else None
     return {
         "id": p.id,
         "name": p.name,
         "price": _num(p.price),
         "position": p.position,
         "active": p.active,
+        # Its consumable in Inventory and the stock there; null without one.
+        "itemId": p.item_id,
+        "stock": item.get("stock") if item else None,
+        "minStock": item.get("min_stock") if item else None,
+        "unit": item.get("unit") if item else None,
+        "lowStock": bool(item.get("low_stock")) if item else False,
     }
 
 
@@ -560,10 +572,13 @@ def pay_claim(claim_id: int):
 @kasse_bp.get("/products")
 @require_member
 def list_products():
-    rows = db.session.scalars(
-        select(KasseProduct).order_by(KasseProduct.position, KasseProduct.name)
+    rows = list(
+        db.session.scalars(
+            select(KasseProduct).order_by(KasseProduct.position, KasseProduct.name)
+        )
     )
-    return jsonify([_product(p) for p in rows])
+    items = inventory.stock_of(rows)
+    return jsonify([_product(p, items) for p in rows])
 
 
 def _apply_product(p: KasseProduct, data: dict, partial: bool) -> None:
@@ -577,6 +592,27 @@ def _apply_product(p: KasseProduct, data: dict, partial: bool) -> None:
         p.position = _int(data, "position", 0, 10000, 0)
 
 
+def _stock_fields(data: dict) -> dict:
+    """The stock fields of the product form, for its item in Inventory."""
+    out = {}
+    if "stock" in data:
+        out["stock"] = _int(data, "stock", -99999, 999999)
+    if "minStock" in data:
+        out["min_stock"] = _int(data, "minStock", 0, 999999)
+    if "unit" in data:
+        out["unit"] = _text(data, "unit", 30)
+    return out
+
+
+def _saved(p: KasseProduct, data: dict, me: int, renamed: bool):
+    """Hand the product to Inventory, then answer with it."""
+    stock = _stock_fields(data)
+    if renamed or stock or p.item_id is None:
+        inventory.push(p, me, **stock)
+    db.session.commit()
+    return _product(p, inventory.stock_of([p]))
+
+
 @kasse_bp.post("/products")
 @permission_required("tab", "update", "Manage the tab and settle it")
 def create_product():
@@ -585,8 +621,8 @@ def create_product():
     p = KasseProduct(active=True, position=last + 1)
     _apply_product(p, data, partial=False)
     db.session.add(p)
-    db.session.commit()
-    return jsonify(_product(p)), 201
+    db.session.flush()
+    return jsonify(_saved(p, data, get_current_member().id, renamed=True)), 201
 
 
 @kasse_bp.patch("/products/<int:product_id>")
@@ -595,9 +631,10 @@ def update_product(product_id: int):
     p, err = _get(KasseProduct, product_id)
     if err:
         return err
-    _apply_product(p, _body(), partial=True)
-    db.session.commit()
-    return jsonify(_product(p))
+    data = _body()
+    before = p.name
+    _apply_product(p, data, partial=True)
+    return jsonify(_saved(p, data, get_current_member().id, renamed=p.name != before))
 
 
 @kasse_bp.delete("/products/<int:product_id>")
@@ -700,6 +737,7 @@ def tick():
         created_by=member.id,
     )
     db.session.add(row)
+    inventory.take(product.id, row.qty, target, member.id)
     db.session.commit()
     return jsonify(_tab(target, member.id, _can(member, TAB))), 201
 
@@ -723,6 +761,7 @@ def untick(tick_id: int):
     if not (own or can_tab):
         return api_error("FORBIDDEN", "a tick can be taken back for 15 minutes", 403)
     target = row.member_id
+    inventory.take(row.product_id, row.qty, target, member.id, back=True)
     db.session.delete(row)
     db.session.commit()
     return jsonify(_tab(target or member.id, member.id, can_tab))
@@ -780,11 +819,46 @@ def _invoice(
     return db.session.get(Invoice, made["id"])
 
 
+def _tab_settings() -> dict:
+    from hubra.core.modules import get_config
+
+    config = get_config(OWNER)
+    days = config.get("tab_due_days")
+    return {
+        "categoryId": config.get("tab_category_id") or None,
+        "dueDays": 30 if days in (None, "") else int(days),
+    }
+
+
+@kasse_bp.get("/tab/settings")
+@permission_required("tab", "update", "Manage the tab and settle it")
+def get_tab_settings():
+    return jsonify(_tab_settings())
+
+
+@kasse_bp.put("/tab/settings")
+@permission_required("tab", "update", "Manage the tab and settle it")
+def put_tab_settings():
+    from hubra.core.modules import get_config, set_config
+
+    data = _body()
+    config = get_config(OWNER)
+    if "categoryId" in data:
+        config["tab_category_id"] = _category_id(data)
+    if "dueDays" in data:
+        config["tab_due_days"] = _int(data, "dueDays", 0, 365, 30)
+    set_config(OWNER, config)
+    log_audit(get_current_member().id, "kasse.tab.settings", "Module", None, "kasse")
+    db.session.commit()
+    return jsonify(_tab_settings())
+
+
 @kasse_bp.post("/tab/settle")
 @permission_required("tab", "update", "Manage the tab and settle it")
 def settle_tab():
     member = get_current_member()
-    data = _body()
+    # What the settle form leaves out comes from the Strichliste's settings.
+    data = {**_tab_settings(), **{k: v for k, v in _body().items() if v is not None}}
     now = datetime.now(timezone.utc)
     label = _text(data, "description", 200) or "Strichliste"
     count = 0
