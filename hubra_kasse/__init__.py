@@ -77,6 +77,7 @@ module = Module(
     # Hubra's features it uses, through contracts (docs/contracts.md in hubra).
     consumes={
         "finance.invoice.create": ">=1,<2",
+        "finance.transaction.create": ">=1,<2",
         "inventory.items.get": ">=1,<2",
         "inventory.items.save": ">=1,<2",
         "inventory.stock.adjust": ">=1,<2",

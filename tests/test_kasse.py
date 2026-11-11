@@ -117,7 +117,9 @@ def test_a_claim_goes_from_receipt_to_booked_expense(client, db, club):
     assert tx.category_id == club["cat"]
     assert any("genehmigt" in t for t in _bell(db, club["max"]))
     assert any("ausbezahlt" in t for t in _bell(db, club["max"]))
-    # A paid claim stays.
+    # A paid claim stays: the treasurer can't delete it, nor can its owner.
+    assert client.delete(f"{BASE}/claims/{claim['id']}").status_code == 403
+    _login(client, "max@test.ch")
     assert client.delete(f"{BASE}/claims/{claim['id']}").status_code == 409
 
 
@@ -317,15 +319,23 @@ def test_an_order_past_its_deadline_takes_no_orders(client, club):
     )
 
 
-def test_the_fridge_sheet_has_a_code_per_product(client, club):
+def test_the_fridge_sheet_has_a_code_per_product(client, app, club, monkeypatch):
+    from hubra_kasse import qrsheet
+
+    coded = []
+    real = qrsheet.qr_data_uri
+    monkeypatch.setattr(qrsheet, "qr_data_uri", lambda text: coded.append(text) or real(text))
     _login(client, "kim@test.ch")
-    client.post(f"{BASE}/products", json={"name": "Bier", "price": "4.00"})
-    bad = client.get(f"{BASE}/products/qr.pdf?link=javascript:alert(1)")
-    assert bad.status_code == 400
-    res = client.get(
-        f"{BASE}/products/qr.pdf?link=https://demo.hubra.club/app/kasse/tab?tick="
-    )
+    product = client.post(f"{BASE}/products", json={"name": "Bier", "price": "4.00"}).get_json()
+    monkeypatch.setitem(app.config, "FRONTEND_BASE_URL", "")
+    assert client.get(f"{BASE}/products/qr.pdf").status_code == 503
+    monkeypatch.setitem(app.config, "FRONTEND_BASE_URL", "https://app.hubra.club/")
+    # A link from the request is ignored: the codes go to the club app only.
+    res = client.get(f"{BASE}/products/qr.pdf?link=https://evil.example/?x=")
     assert res.status_code == 200 and res.data.startswith(b"%PDF")
+    assert len(coded) == 1
+    assert coded[0].startswith("https://app.hubra.club/")
+    assert coded[0].endswith(f"/app/kasse/tab?tick={product['id']}")
     _login(client, "max@test.ch")
     assert client.get(f"{BASE}/products/qr.pdf?link=https://x/").status_code == 403
 
@@ -548,3 +558,34 @@ def test_money_on_someone_elses_tab_is_on_record(client, db, club):
         "kasse.tick.create",
         "kasse.tick.delete",
     } <= actions
+
+
+def test_nobody_decides_or_pays_their_own_claim(client, db, club):
+    """Four eyes: the treasurer's own claim needs another treasurer."""
+    from hubra.core.models.member import Member
+    from hubra_kasse.models import KasseClaim
+
+    _login(client, "kim@test.ch")
+    own = _claim(client).get_json()
+    base = f"{BASE}/claims/{own['id']}"
+    refused = client.post(f"{base}/decide", json={"approve": True})
+    assert refused.status_code == 403 and refused.get_json()["error"] == "OWN_CLAIM"
+    db.session.get(KasseClaim, own["id"]).status = "approved"
+    db.session.commit()
+    refused = client.post(f"{base}/pay", json={})
+    assert refused.status_code == 403 and refused.get_json()["error"] == "OWN_CLAIM"
+    assert db.session.get(KasseClaim, own["id"]).status == "approved"
+    # Not even an admin; and a decided claim can't be withdrawn either.
+    assert db.session.get(Member, club["kim"]) is not None
+    assert client.delete(base).status_code == 409
+
+
+def test_the_treasurer_rejects_instead_of_deleting(client, db, club):
+    _login(client, "max@test.ch")
+    claim = _claim(client).get_json()
+    _login(client, "kim@test.ch")
+    assert client.delete(f"{BASE}/claims/{claim['id']}").status_code == 403
+    client.post(f"{BASE}/claims/{claim['id']}/decide", json={"approve": False, "note": "doppelt"})
+    _login(client, "max@test.ch")
+    # Rejected stays on record too.
+    assert client.delete(f"{BASE}/claims/{claim['id']}").status_code == 409

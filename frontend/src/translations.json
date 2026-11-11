@@ -79,7 +79,8 @@
           "approved": "Approved",
           "rejected": "Rejected",
           "paid": "Paid"
-        }
+        },
+        "ownByOther": "Someone else approves and pays your own claim"
       },
       "method": {
         "IBAN": "Bank transfer",
@@ -275,7 +276,8 @@
           "approved": "Genehmigt",
           "rejected": "Abgelehnt",
           "paid": "Ausbezahlt"
-        }
+        },
+        "ownByOther": "Deine eigenen Spesen genehmigt und zahlt jemand anderes"
       },
       "method": {
         "IBAN": "Überweisung",

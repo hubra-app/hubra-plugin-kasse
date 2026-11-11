@@ -201,7 +201,7 @@ function ClaimsTab({ options, view }: { options: Options | undefined; view: 'min
                         <IconPaperclip size={16} />
                       </ActionIcon>
                     )}
-                    {canDecide && c.status === 'submitted' && (
+                    {canDecide && c.status === 'submitted' && c.memberId !== options?.memberId && (
                       <>
                         <Button
                           size="xs"
@@ -217,12 +217,17 @@ function ClaimsTab({ options, view }: { options: Options | undefined; view: 'min
                         </Button>
                       </>
                     )}
-                    {canDecide && c.status === 'approved' && (
+                    {canDecide && c.status === 'approved' && c.memberId !== options?.memberId && (
                       <Button size="xs" leftSection={<IconCash size={14} />} onClick={() => setPaying(c)}>
                         {t('kasse.claims.pay')}
                       </Button>
                     )}
-                    {c.status !== 'paid' && (c.status === 'submitted' && c.memberId === options?.memberId || canDecide) && (
+                    {canDecide && c.memberId === options?.memberId && (c.status === 'submitted' || c.status === 'approved') && (
+                      <Text size="xs" c="dimmed">
+                        {t('kasse.claims.ownByOther')}
+                      </Text>
+                    )}
+                    {c.status === 'submitted' && c.memberId === options?.memberId && (
                       <ActionIcon variant="subtle" color="red" aria-label={t('kasse.delete')} onClick={() => setDeleting(c)}>
                         <IconTrash size={16} />
                       </ActionIcon>
