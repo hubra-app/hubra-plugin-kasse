@@ -447,3 +447,104 @@ def test_products_are_consumables_in_inventory(client, db, club):
     on_item_deleted(item_id=beer["itemId"])
     product = db.session.get(KasseProduct, beer["id"])
     assert product.item_id is None and product.active is False
+
+
+# ── Security (audit 2026-11-11) ──────────────────────────────────────────────
+
+
+SVG = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
+
+
+def test_a_receipt_is_a_photo_or_pdf_by_its_bytes(client, db, club):
+    """The browser's type doesn't count: an SVG or HTML "photo" would run
+    script in the club app when the treasurer opens it."""
+    _login(client, "max@test.ch")
+    for blob, name, kind in (
+        (SVG, "q.svg", "image/svg+xml"),
+        (SVG, "q.png", "image/png"),
+        (b"<html><script>alert(1)</script>", "q.jpg", "image/jpeg"),
+    ):
+        res = client.post(
+            f"{BASE}/claims",
+            data={"title": "x", "amount": "5", "receipt": (io.BytesIO(blob), name, kind)},
+            content_type="multipart/form-data",
+        )
+        assert res.status_code == 400, name
+    pdf = client.post(
+        f"{BASE}/claims",
+        data={
+            "title": "x",
+            "amount": "5",
+            "receipt": (io.BytesIO(b"%PDF-1.7\n..."), "q.pdf", "application/octet-stream"),
+        },
+        content_type="multipart/form-data",
+    ).get_json()
+    assert pdf["receiptType"] == "application/pdf"
+    res = client.get(f"{BASE}/claims/{pdf['id']}/receipt?inline=1")
+    assert res.mimetype == "application/pdf"
+    assert "sandbox" in res.headers["Content-Security-Policy"]
+
+
+def test_an_old_svg_receipt_only_leaves_as_a_download(client, db, club):
+    from hubra.core import files as store
+    from hubra_kasse.models import KasseClaim
+
+    _login(client, "max@test.ch")
+    claim_id = _claim(client).get_json()["id"]
+    claim = db.session.get(KasseClaim, claim_id)
+    claim.receipt_key = store.put("kasse", SVG, "image/svg+xml").key
+    claim.receipt_type = "image/svg+xml"
+    db.session.commit()
+    _login(client, "kim@test.ch")
+    res = client.get(f"{BASE}/claims/{claim_id}/receipt?inline=1")
+    assert res.status_code == 200
+    assert res.mimetype == "application/octet-stream"
+    assert res.headers["Content-Disposition"].startswith("attachment")
+
+
+def test_the_supplier_list_has_no_formulas(client, db, club):
+    from hubra.core.models.member import Member
+
+    db.session.get(Member, club["max"]).first_name = "=HYPERLINK(1)"
+    db.session.commit()
+    _login(client, "kim@test.ch")
+    order = client.post(
+        f"{BASE}/orders",
+        json={
+            "title": "Caps",
+            "deadline": (date.today() + timedelta(days=5)).isoformat(),
+            "items": [{"name": "@SUM(A1)", "price": "10"}],
+        },
+    ).get_json()
+    _login(client, "max@test.ch")
+    client.put(
+        f"{BASE}/orders/{order['id']}/mine",
+        json={"lines": [{"itemId": order["items"][0]["id"], "qty": 1}]},
+    )
+    _login(client, "kim@test.ch")
+    csv = client.get(f"{BASE}/orders/{order['id']}/list.csv").data.decode("utf-8-sig")
+    assert "'@SUM(A1);;1" in csv and "'=HYPERLINK(1)" in csv
+    assert "\n=" not in csv and ";=" not in csv and ";@" not in csv
+
+
+def test_money_on_someone_elses_tab_is_on_record(client, db, club):
+    from hubra.core.models.audit import AuditEntry
+
+    _login(client, "kim@test.ch")
+    product = client.post(f"{BASE}/products", json={"name": "Bier", "price": "4"}).get_json()
+    client.patch(f"{BASE}/products/{product['id']}", json={"price": "5"})
+    tab = client.post(
+        f"{BASE}/tab", json={"productId": product["id"], "memberId": club["max"]}
+    ).get_json()
+    client.delete(f"{BASE}/tab/{tab['ticks'][0]['id']}")
+    actions = set(
+        db.session.scalars(
+            select(AuditEntry.action).where(AuditEntry.action.like("kasse.%"))
+        )
+    )
+    assert {
+        "kasse.product.create",
+        "kasse.product.update",
+        "kasse.tick.create",
+        "kasse.tick.delete",
+    } <= actions
