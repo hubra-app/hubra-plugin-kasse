@@ -731,6 +731,9 @@ def delete_product(product_id: int):
         return err
     # Ticks keep their name and price, so the product can go.
     log_audit(get_current_member().id, "kasse.product.delete", "KasseProduct", p.id, p.name)
+    from .links import unlink_product
+
+    unlink_product(p.id)
     db.session.delete(p)
     db.session.commit()
     return "", 204
@@ -1216,6 +1219,9 @@ def delete_order(order_id: int):
     if o.status == "billed":
         return api_error("ORDER_BILLED", "a billed order stays for the books", 409)
     log_audit(member.id, "kasse.order.delete", "KasseOrder", o.id, o.title)
+    from .links import delete_order_rows
+
+    delete_order_rows(o.id)
     db.session.delete(o)
     db.session.commit()
     return "", 204

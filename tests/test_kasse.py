@@ -589,3 +589,40 @@ def test_the_treasurer_rejects_instead_of_deleting(client, db, club):
     _login(client, "max@test.ch")
     # Rejected stays on record too.
     assert client.delete(f"{BASE}/claims/{claim['id']}").status_code == 409
+
+
+def test_a_deleted_invoice_puts_its_ticks_back_on_the_tab(client, db, club):
+    """Club schemas have no foreign keys: Kasse unbills by itself."""
+    from hubra.core.contracts import SYSTEM, call
+    from hubra_kasse.models import KasseTick
+
+    _login(client, "kim@test.ch")
+    product = client.post(f"{BASE}/products", json={"name": "Bier", "price": "4"}).get_json()
+    client.post(f"{BASE}/tab", json={"productId": product["id"], "memberId": club["max"]})
+    client.post(f"{BASE}/tab/settle", json={"categoryId": club["cat"]})
+    tick = db.session.scalar(select(KasseTick).where(KasseTick.member_id == club["max"]))
+    assert tick.invoice_id is not None
+    call("finance.invoice.delete", invoice_id=tick.invoice_id, actor=SYSTEM)
+    db.session.commit()
+    db.session.refresh(tick)
+    # Open again (on Postgres in tests the foreign key nulls it first).
+    assert tick.invoice_id is None
+    assert client.get(f"{BASE}/tab/members").get_json()["members"][0]["total"] == 4.0
+
+
+def test_purge_orphans_clears_links_to_rows_that_are_gone(db, club):
+    from hubra_kasse.links import purge_orphans
+    from hubra_kasse.models import KasseOrderItem, KasseTick
+
+    if db.engine.dialect.name != "sqlite":
+        pytest.skip("needs a schema without foreign keys, like a club's")
+    db.session.add(
+        KasseTick(member_id=club["max"], product_id=987654, name="Bier", price=4, qty=1, invoice_id=987654)
+    )
+    db.session.add(KasseOrderItem(order_id=987654, name="Cap", price=10))
+    db.session.commit()
+    done = purge_orphans()
+    db.session.commit()
+    assert done["reopened"] == 1 and done["products"] == 1 and done["orderRows"] == 1
+    tick = db.session.scalar(select(KasseTick).where(KasseTick.name == "Bier"))
+    assert tick.invoice_id is None and tick.product_id is None

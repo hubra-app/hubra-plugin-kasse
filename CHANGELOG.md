@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Links kept by hand.** Club schemas have no foreign keys, so the `ondelete` rules never ran: a deleted invoice now puts its ticks back on the open tab and unbills its order lines (`invoice.deleted`), deleting an order deletes its items and lines, deleting a product unlinks its ticks, and the daily job `kasse-purge-orphans` clears links to invoices, transactions, products and orders that are gone.
 - **Four eyes on expense claims.** Nobody approves, rejects or pays their own claim: a treasurer's own claim needs another member with the right (`OWN_CLAIM`, also for admins). The Spesen list says so on one's own claim.
 - **Decided claims stay on record.** Only the member who handed in a claim can withdraw it, and only before it is decided; the treasurer rejects instead of deleting. Approved, rejected and paid claims, with their receipt, stay.
 - **Paying a claim books through core's contract** `finance.transaction.create` instead of writing the transactions table directly (checks, closed fiscal years, audit entry). Needs a Hubra with that contract (hubra-app/hubra, next release after 0.2.5); raise `hubra:` to that version when releasing. On an older Hubra paying answers 503 `HUBRA_TOO_OLD`.
