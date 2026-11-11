@@ -189,8 +189,9 @@ export function OrderModal({ order, onClose, onDone }: { order: Order | null; on
                 onChange={(p) => setItem(n, { price: p })}
                 min={0}
                 decimalScale={2}
-                leftSection="CHF"
-                leftSectionWidth={44}
+                thousandSeparator="’"
+                prefix="CHF "
+                hideControls
                 style={{ flex: 1, minWidth: 110 }}
               />
               <TextInput
