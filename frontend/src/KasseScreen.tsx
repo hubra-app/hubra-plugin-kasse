@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ActionIcon, Anchor, Badge, Button, FileInput, Group, Paper, Select, Stack, Text, TextInput, Textarea } from '@mantine/core'
+import { ActionIcon, Anchor, Badge, Button, FileInput, Group, NumberInput, Paper, Select, Stack, Text, TextInput, Textarea } from '@mantine/core'
 import { IconCheck, IconPaperclip, IconPlus, IconReceipt, IconShoppingBag, IconTrash, IconBeer, IconX, IconCash } from '@tabler/icons-react'
 import {
   ConfirmModal,
@@ -290,7 +290,15 @@ function ClaimModal({ onClose, onDone }: { onClose: () => void; onDone: () => vo
       </Field>
       <Group grow align="flex-start">
         <Field label={t('kasse.amount')}>
-          <TextInput value={v.amount} onChange={(e) => set('amount', e.currentTarget.value)} inputMode="decimal" leftSection="CHF" leftSectionWidth={44} />
+          <NumberInput
+            value={v.amount}
+            onChange={(x) => set('amount', x === '' ? '' : String(x))}
+            min={0}
+            decimalScale={2}
+            thousandSeparator="’"
+            prefix="CHF "
+            hideControls
+          />
         </Field>
         <Field label={t('kasse.claims.spentOn')}>
           <TextInput type="date" value={v.spentOn} max={todayIso()} onChange={(e) => set('spentOn', e.currentTarget.value)} />

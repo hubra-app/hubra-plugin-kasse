@@ -491,7 +491,7 @@ function ProductModal({ product, onClose, onDone }: { product: Product | null; o
           <TextInput value={name} onChange={(e) => setName(e.currentTarget.value)} placeholder={t('kasse.tab.productExample')} data-autofocus />
         </Field>
         <Field label={t('kasse.price')}>
-          <NumberInput value={price} onChange={setPrice} min={0} decimalScale={2} fixedDecimalScale step={0.5} leftSection="CHF" leftSectionWidth={44} />
+          <NumberInput value={price} onChange={setPrice} min={0} decimalScale={2} fixedDecimalScale thousandSeparator="’" prefix="CHF " hideControls />
         </Field>
       </Group>
       {inventory && (
