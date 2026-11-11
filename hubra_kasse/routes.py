@@ -600,7 +600,7 @@ def pay_claim(claim_id: int):
     try:
         tx = call(
             "finance.transaction.create",
-            date=_date(data, "paidOn") or date.today(),
+            booked_on=_date(data, "paidOn") or date.today(),
             description=f"Spesen: {claim.title}"[:255],
             amount=abs(claim.amount),
             type="expense",
