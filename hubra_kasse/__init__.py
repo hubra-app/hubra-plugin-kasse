@@ -67,21 +67,30 @@ module = Module(
         ),
     ),
     tasks=("hubra_kasse.tasks",),
-    schedule=(Schedule("kasse-link-items", "hubra_kasse.tasks.link_items", 300.0),),
+    schedule=(
+        Schedule("kasse-link-items", "hubra_kasse.tasks.link_items", 300.0),
+        # Club schemas have no foreign keys (hubra_kasse.links).
+        Schedule("kasse-purge-orphans", "hubra_kasse.tasks.purge_orphans", 86400.0),
+    ),
     # Each product is a consumable in Inventory, which counts the stock
     # (hubra_kasse.items). Optional: without Inventory the tab works as before.
     events={
         "inventory.item.saved": "hubra_kasse.items:on_item_saved",
         "inventory.item.deleted": "hubra_kasse.items:on_item_deleted",
+        # A deleted invoice's ticks and order lines are open again.
+        "invoice.deleted": "hubra_kasse.links:on_invoice_deleted",
     },
+    events_in_transaction=("invoice.deleted",),
     # Hubra's features it uses, through contracts (docs/contracts.md in hubra).
     consumes={
         "finance.invoice.create": ">=1,<2",
+        "finance.transaction.create": ">=1,<2",
         "inventory.items.get": ">=1,<2",
         "inventory.items.save": ">=1,<2",
         "inventory.stock.adjust": ">=1,<2",
         "inventory.item.saved": ">=1,<2",
         "inventory.item.deleted": ">=1,<2",
+        "invoice.deleted": ">=1,<2",
     },
     # Dashboard widgets (hubra_kasse/widgets.py).
     provides=(

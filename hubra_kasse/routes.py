@@ -5,15 +5,16 @@ GET    /claims                        the caller's expense claims
 GET    /claims/all?show=open|all      everyone's (treasurer)
 POST   /claims                        multipart: title, amount, spentOn, notes?, iban?, receipt
 GET    /claims/<id>/receipt           the receipt (owner or treasurer)
-DELETE /claims/<id>                   owner while submitted, or treasurer
-POST   /claims/<id>/decide            {approve, note?}
+DELETE /claims/<id>                   owner while submitted (decided claims stay)
+POST   /claims/<id>/decide            {approve, note?}  (never one's own claim)
 POST   /claims/<id>/pay               {categoryId?, method?, paidOn?}: books the expense
+                                      (never one's own claim)
 GET    /products                      what can go on the tab
 POST   /products                      {name, price, stock?, minStock?, unit?}
 PATCH  /products/<id>                 {name?, price?, active?, position?, stock?, minStock?, unit?}
                                       (stock fields go to the product's item in Inventory)
 DELETE /products/<id>
-GET    /products/qr.pdf?link=         the codes for the fridge
+GET    /products/qr.pdf               the codes for the fridge (to the club app)
 GET    /tab                           the caller's open ticks and total
 POST   /tab                           {productId, qty?, memberId? (treasurer)}
 DELETE /tab/<id>                      own tick within 15 minutes, or treasurer
@@ -455,6 +456,17 @@ def create_claim():
     return jsonify(_claim(claim, _names([member.id]))), 201
 
 
+def _not_own(member, claim: KasseClaim):
+    """Four eyes: nobody approves, rejects or pays their own claim."""
+    if claim.member_id == member.id:
+        return api_error(
+            "OWN_CLAIM",
+            "someone else with the right approves and pays your own claim",
+            403,
+        )
+    return None
+
+
 def _own_or(member, claim: KasseClaim, key: str) -> bool:
     return claim.member_id == member.id or _can(member, key)
 
@@ -499,13 +511,17 @@ def delete_claim(claim_id: int):
     claim, err = _get(KasseClaim, claim_id, lock=True)
     if err:
         return err
-    mine = claim.member_id == member.id and claim.status == "submitted"
-    if not (mine or _can(member, CLAIMS)):
+    # Only the member who handed it in withdraws it, and only before anyone
+    # decided: an approved, rejected or paid claim (and its receipt) stays
+    # on record. The treasurer rejects instead of deleting.
+    if claim.member_id != member.id:
         return api_error(
-            "FORBIDDEN", "only a claim not yet decided can be withdrawn", 403
+            "FORBIDDEN", "only the member who handed in a claim can withdraw it", 403
         )
-    if claim.status == "paid":
-        return api_error("CLAIM_PAID", "a paid claim stays for the books", 409)
+    if claim.status != "submitted":
+        return api_error(
+            "CLAIM_DECIDED", "a decided claim stays on record", 409
+        )
     if claim.receipt_key:
         try:
             store.remove(claim.receipt_key)
@@ -524,6 +540,8 @@ def decide_claim(claim_id: int):
     claim, err = _get(KasseClaim, claim_id, lock=True)
     if err:
         return err
+    if refused := _not_own(member, claim):
+        return refused
     if claim.status == "paid":
         return api_error("CLAIM_PAID", "this claim is paid already", 409)
     data = _body()
@@ -560,12 +578,14 @@ def decide_claim(claim_id: int):
 @kasse_bp.post("/claims/<int:claim_id>/pay")
 @permission_required("claims", "update", "Approve, reject and pay expense claims")
 def pay_claim(claim_id: int):
-    from hubra.core.models.finance import Transaction
+    from hubra.core.contracts import SYSTEM, ActionUnavailable, call
 
     member = get_current_member()
     claim, err = _get(KasseClaim, claim_id, lock=True)
     if err:
         return err
+    if refused := _not_own(member, claim):
+        return refused
     if claim.status != "approved":
         return api_error(
             "CLAIM_NOT_APPROVED", "approve the claim before paying it", 409
@@ -575,24 +595,31 @@ def pay_claim(claim_id: int):
     if method not in METHODS:
         raise Invalid(f"method must be one of {', '.join(METHODS)}")
     names = _names([claim.member_id])
-    # The books' transactions table is core, so the expense is written there
-    # directly (plugins never import the Finances plugin). Expenses are
-    # stored negative, as the finance screens create them.
-    tx = Transaction(
-        date=_date(data, "paidOn") or date.today(),
-        description=f"Spesen: {claim.title}"[:255],
-        category_id=_category_id(data),
-        member_id=claim.member_id,
-        payee_name=names.get(claim.member_id or 0),
-        amount=-abs(claim.amount),
-        method=method,
-        type="expense",
-    )
-    db.session.add(tx)
-    db.session.flush()
-    log_audit(member.id, "create_transaction", "Transaction", tx.id, tx.description)
+    # Booked through core's contract (checks, closed years, audit entry);
+    # the till's own right was checked by the route.
+    try:
+        tx = call(
+            "finance.transaction.create",
+            booked_on=_date(data, "paidOn") or date.today(),
+            description=f"Spesen: {claim.title}"[:255],
+            amount=abs(claim.amount),
+            type="expense",
+            method=method,
+            category_id=_category_id(data),
+            member_id=claim.member_id,
+            payee_name=names.get(claim.member_id or 0),
+            actor_id=member.id,
+            actor=SYSTEM,
+        )
+    except ActionUnavailable:
+        return api_error(
+            "HUBRA_TOO_OLD",
+            "paying a claim needs a newer Hubra (finance.transaction.create)",
+            503,
+        )
     claim.status = "paid"
-    claim.transaction_id = tx.id
+    claim.transaction_id = tx["id"]
+    log_audit(member.id, "kasse.claim.paid", "KasseClaim", claim.id, claim.title)
     claim.paid_at = datetime.now(timezone.utc)
     if not claim.decided_by:
         claim.decided_by = member.id
@@ -704,6 +731,9 @@ def delete_product(product_id: int):
         return err
     # Ticks keep their name and price, so the product can go.
     log_audit(get_current_member().id, "kasse.product.delete", "KasseProduct", p.id, p.name)
+    from .links import unlink_product
+
+    unlink_product(p.id)
     db.session.delete(p)
     db.session.commit()
     return "", 204
@@ -712,12 +742,20 @@ def delete_product(product_id: int):
 @kasse_bp.get("/products/qr.pdf")
 @permission_required("tab", "update", "Manage the tab and settle it")
 def products_qr():
-    """?link=https://club.example/app/kasse/tab?tick= : the codes point there."""
+    """The codes point at the club app's tab, built here from Hubra's own
+    address (never from the request, so a sheet can't send members to
+    another site)."""
+    from hubra.core.services.email import club_app_url
+
     from . import qrsheet
 
-    link = (request.args.get("link") or "").strip()
-    if not link.startswith(("https://", "http://")) or len(link) > 300:
-        raise Invalid("link must be the club app's address")
+    link = club_app_url("/app/kasse/tab?tick=")
+    if not link:
+        return api_error(
+            "NO_APP_ADDRESS",
+            "Hubra doesn't know the club app's address (FRONTEND_BASE_URL)",
+            503,
+        )
     rows = list(
         db.session.scalars(
             select(KasseProduct)
@@ -1181,6 +1219,9 @@ def delete_order(order_id: int):
     if o.status == "billed":
         return api_error("ORDER_BILLED", "a billed order stays for the books", 409)
     log_audit(member.id, "kasse.order.delete", "KasseOrder", o.id, o.title)
+    from .links import delete_order_rows
+
+    delete_order_rows(o.id)
     db.session.delete(o)
     db.session.commit()
     return "", 204

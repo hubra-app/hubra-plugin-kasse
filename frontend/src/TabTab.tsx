@@ -48,10 +48,9 @@ function useQrSheet() {
   const { i18n } = useT()
   const { run } = useAction()
   return () => {
-    const appRoot = window.location.origin + window.location.pathname.split('/app/')[0]
-    const link = `${appRoot}/app/kasse/tab?tick=`
+    // The codes point at the club app's own address, which the server knows.
     const lang = i18n.language?.startsWith('en') ? 'en' : 'de'
-    return run(() => openFile(`/products/qr.pdf?inline=1&lang=${lang}&link=${encodeURIComponent(link)}`))
+    return run(() => openFile(`/products/qr.pdf?inline=1&lang=${lang}`))
   }
 }
 
