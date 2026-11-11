@@ -77,7 +77,42 @@ ORDERS = "kasse.orders.update"
 # A member can take back a tick this long after making it.
 UNDO = timedelta(minutes=15)
 METHODS = ("IBAN", "Cash", "Twint", "Card")
-RECEIPT_TYPES = ("image/", "application/pdf")
+# The receipt types taken, found from the file's first bytes (never from the
+# type the browser sends: an SVG or HTML "photo" would run script in the app
+# when the treasurer opens it). Only these are ever served as what they are.
+RECEIPT_TYPES = (
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+    "application/pdf",
+)
+
+
+def _receipt_type(blob: bytes) -> str | None:
+    """The receipt's type from its first bytes, or None if it's none of
+    ``RECEIPT_TYPES``."""
+    head = blob[:32]
+    if head.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
+    if head[4:8] == b"ftyp":
+        brand = head[8:12]
+        if brand in (b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx"):
+            return "image/heic"
+        if brand in (b"mif1", b"msf1", b"heif"):
+            return "image/heif"
+        return None
+    if blob[:1024].lstrip().startswith(b"%PDF-"):
+        return "application/pdf"
+    return None
 
 
 class Invalid(Exception):
@@ -188,8 +223,15 @@ def _category_id(data) -> int | None:
     return value
 
 
-def _get(model, row_id: int):
-    row = db.session.get(model, row_id)
+def _get(model, row_id: int, lock: bool = False):
+    """The row, or a 404. ``lock``: hold it (SELECT ... FOR UPDATE) until the
+    commit, read fresh, so two requests can't both pay, bill or settle it."""
+    if lock:
+        row = db.session.get(
+            model, row_id, with_for_update=True, populate_existing=True
+        )
+    else:
+        row = db.session.get(model, row_id)
     if row is None:
         return None, api_error("NOT_FOUND", "not found", 404)
     return row, None
@@ -390,11 +432,11 @@ def create_claim():
     upload = request.files.get("receipt")
     if upload is not None and upload.filename:
         blob = upload.read()
-        kind = (upload.mimetype or "").lower()
         if not blob:
             raise Invalid("the receipt is empty")
-        if not kind.startswith(RECEIPT_TYPES):
-            raise Invalid("the receipt must be a photo or a PDF")
+        kind = _receipt_type(blob)
+        if kind is None:
+            raise Invalid("the receipt must be a photo (JPEG, PNG, HEIC) or a PDF")
         try:
             stored = store.put(OWNER, blob, kind)
         except store.FileTooLarge as err:
@@ -405,7 +447,7 @@ def create_claim():
             )
         claim.receipt_key = stored.key
         claim.receipt_name = upload.filename[:200]
-        claim.receipt_type = kind[:100]
+        claim.receipt_type = kind
     db.session.add(claim)
     db.session.flush()
     log_audit(member.id, "kasse.claim.create", "KasseClaim", claim.id, claim.title)
@@ -436,19 +478,25 @@ def claim_receipt(claim_id: int):
         return api_error(
             "FILE_STORE_UNAVAILABLE", "the file store is not reachable", 503
         )
-    return send_file(
+    # Receipts from before the type was checked may be anything: those only
+    # ever leave as a download of plain bytes, never as a page or an image.
+    safe = claim.receipt_type in RECEIPT_TYPES
+    resp = send_file(
         io.BytesIO(blob),
-        mimetype=claim.receipt_type or "application/octet-stream",
-        as_attachment=request.args.get("inline") != "1",
+        mimetype=claim.receipt_type if safe else "application/octet-stream",
+        as_attachment=not safe or request.args.get("inline") != "1",
         download_name=claim.receipt_name or f"receipt-{claim.id}",
     )
+    resp.headers["Content-Security-Policy"] = "sandbox; default-src 'none'"
+    resp.headers["Cache-Control"] = "private, no-store"
+    return resp
 
 
 @kasse_bp.delete("/claims/<int:claim_id>")
 @require_member
 def delete_claim(claim_id: int):
     member = get_current_member()
-    claim, err = _get(KasseClaim, claim_id)
+    claim, err = _get(KasseClaim, claim_id, lock=True)
     if err:
         return err
     mine = claim.member_id == member.id and claim.status == "submitted"
@@ -473,7 +521,7 @@ def delete_claim(claim_id: int):
 @permission_required("claims", "update", "Approve, reject and pay expense claims")
 def decide_claim(claim_id: int):
     member = get_current_member()
-    claim, err = _get(KasseClaim, claim_id)
+    claim, err = _get(KasseClaim, claim_id, lock=True)
     if err:
         return err
     if claim.status == "paid":
@@ -513,10 +561,9 @@ def decide_claim(claim_id: int):
 @permission_required("claims", "update", "Approve, reject and pay expense claims")
 def pay_claim(claim_id: int):
     from hubra.core.models.finance import Transaction
-    from hubra.core.utils import log_audit
 
     member = get_current_member()
-    claim, err = _get(KasseClaim, claim_id)
+    claim, err = _get(KasseClaim, claim_id, lock=True)
     if err:
         return err
     if claim.status != "approved":
@@ -622,7 +669,9 @@ def create_product():
     _apply_product(p, data, partial=False)
     db.session.add(p)
     db.session.flush()
-    return jsonify(_saved(p, data, get_current_member().id, renamed=True)), 201
+    me = get_current_member().id
+    log_audit(me, "kasse.product.create", "KasseProduct", p.id, f"{p.name} {p.price:.2f}")
+    return jsonify(_saved(p, data, me, renamed=True)), 201
 
 
 @kasse_bp.patch("/products/<int:product_id>")
@@ -632,9 +681,19 @@ def update_product(product_id: int):
     if err:
         return err
     data = _body()
-    before = p.name
+    before, price = p.name, p.price
     _apply_product(p, data, partial=True)
-    return jsonify(_saved(p, data, get_current_member().id, renamed=p.name != before))
+    me = get_current_member().id
+    if p.price != price or p.name != before:
+        # The price of the day goes on every tick from now on.
+        log_audit(
+            me,
+            "kasse.product.update",
+            "KasseProduct",
+            p.id,
+            f"{before} {price:.2f} -> {p.name} {p.price:.2f}",
+        )
+    return jsonify(_saved(p, data, me, renamed=p.name != before))
 
 
 @kasse_bp.delete("/products/<int:product_id>")
@@ -644,6 +703,7 @@ def delete_product(product_id: int):
     if err:
         return err
     # Ticks keep their name and price, so the product can go.
+    log_audit(get_current_member().id, "kasse.product.delete", "KasseProduct", p.id, p.name)
     db.session.delete(p)
     db.session.commit()
     return "", 204
@@ -737,6 +797,16 @@ def tick():
         created_by=member.id,
     )
     db.session.add(row)
+    if target != member.id:
+        # Money on another member's tab: who put it there stays on record.
+        db.session.flush()
+        log_audit(
+            member.id,
+            "kasse.tick.create",
+            "KasseTick",
+            row.id,
+            f"member {target}: {row.qty} x {row.name} {row.price:.2f}",
+        )
     inventory.take(product.id, row.qty, target, member.id)
     db.session.commit()
     return jsonify(_tab(target, member.id, _can(member, TAB))), 201
@@ -746,7 +816,7 @@ def tick():
 @require_member
 def untick(tick_id: int):
     member = get_current_member()
-    row, err = _get(KasseTick, tick_id)
+    row, err = _get(KasseTick, tick_id, lock=True)
     if err:
         return err
     can_tab = _can(member, TAB)
@@ -761,6 +831,15 @@ def untick(tick_id: int):
     if not (own or can_tab):
         return api_error("FORBIDDEN", "a tick can be taken back for 15 minutes", 403)
     target = row.member_id
+    if not own:
+        # Taken off the tab by the treasurer, or after the undo window.
+        log_audit(
+            member.id,
+            "kasse.tick.delete",
+            "KasseTick",
+            row.id,
+            f"member {target}: {row.qty} x {row.name} {row.price:.2f}",
+        )
     inventory.take(row.product_id, row.qty, target, member.id, back=True)
     db.session.delete(row)
     db.session.commit()
@@ -863,10 +942,23 @@ def settle_tab():
     label = _text(data, "description", 200) or "Strichliste"
     count = 0
     total = Decimal("0")
-    for member_id, amount, _n in _open_totals():
+    # The open ticks, held until the commit: a second settle waits and then
+    # finds them on an invoice, and a tick made meanwhile waits for the next
+    # settle instead of being marked settled without being on an invoice.
+    per_member: dict[int, list[KasseTick]] = defaultdict(list)
+    for t in db.session.scalars(
+        select(KasseTick)
+        .where(KasseTick.invoice_id.is_(None))
+        .where(KasseTick.member_id.isnot(None))
+        .order_by(KasseTick.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ):
+        per_member[t.member_id].append(t)
+    for member_id, ticks in per_member.items():
+        amount = sum((t.price * t.qty for t in ticks), Decimal("0"))
         if amount <= 0 or db.session.get(Member, member_id) is None:
             continue
-        ticks = _open_ticks(member_id)
         invoice = _invoice(
             member_id, amount, f"{label} bis {now:%d.%m.%Y}", data, member.id
         )
@@ -926,6 +1018,13 @@ def _order(
     return out
 
 
+def _cell(value) -> str:
+    """A CSV cell a spreadsheet shows as text: a leading = + - @ (or a tab
+    or return) would make it a formula (CSV injection), so it gets a '."""
+    text = "" if value is None else str(value)
+    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+
+
 def _summary(items, lines) -> list[dict]:
     """Pieces per item and size, for the supplier."""
     count: dict[tuple[int, str], int] = defaultdict(int)
@@ -981,7 +1080,12 @@ def _apply_items(o: KasseOrder, data: dict) -> None:
     for pos, entry in enumerate(raw):
         if not isinstance(entry, dict):
             raise Invalid("items must be a list of objects")
-        item = existing.get(entry.get("id") or 0)
+        item_id = entry.get("id")
+        item = (
+            existing.get(item_id)
+            if isinstance(item_id, int) and not isinstance(item_id, bool)
+            else None
+        )
         if item is None:
             item = KasseOrderItem(order_id=o.id)
             db.session.add(item)
@@ -1053,7 +1157,7 @@ def get_order(order_id: int):
 @permission_required("orders", "update", "Run collective orders")
 def update_order(order_id: int):
     member = get_current_member()
-    o, err = _get(KasseOrder, order_id)
+    o, err = _get(KasseOrder, order_id, lock=True)
     if err:
         return err
     if o.status == "billed":
@@ -1062,6 +1166,7 @@ def update_order(order_id: int):
     _apply_order(o, data, partial=True)
     if "items" in data:
         _apply_items(o, data)
+    log_audit(member.id, "kasse.order.update", "KasseOrder", o.id, o.title)
     db.session.commit()
     return jsonify(_order(o, member.id, True, date.today(), full=True))
 
@@ -1070,7 +1175,7 @@ def update_order(order_id: int):
 @permission_required("orders", "update", "Run collective orders")
 def delete_order(order_id: int):
     member = get_current_member()
-    o, err = _get(KasseOrder, order_id)
+    o, err = _get(KasseOrder, order_id, lock=True)
     if err:
         return err
     if o.status == "billed":
@@ -1085,7 +1190,9 @@ def delete_order(order_id: int):
 @require_member
 def order_mine(order_id: int):
     member = get_current_member()
-    o, err = _get(KasseOrder, order_id)
+    # Held so closing or billing waits for this change (or this one sees
+    # the order closed): no line slips in after the bill.
+    o, err = _get(KasseOrder, order_id, lock=True)
     if err:
         return err
     if not _open(o, date.today()):
@@ -1140,7 +1247,7 @@ def order_mine(order_id: int):
 @permission_required("orders", "update", "Run collective orders")
 def close_order(order_id: int):
     member = get_current_member()
-    o, err = _get(KasseOrder, order_id)
+    o, err = _get(KasseOrder, order_id, lock=True)
     if err:
         return err
     if o.status == "billed":
@@ -1149,6 +1256,13 @@ def close_order(order_id: int):
     if reopen and o.deadline < date.today():
         raise Invalid("move the deadline before reopening the order")
     o.status = "open" if reopen else "closed"
+    log_audit(
+        member.id,
+        "kasse.order.reopen" if reopen else "kasse.order.close",
+        "KasseOrder",
+        o.id,
+        o.title,
+    )
     db.session.commit()
     return jsonify(_order(o, member.id, True, date.today(), full=True))
 
@@ -1177,7 +1291,7 @@ def order_csv(order_id: int):
     w = csv.writer(out, delimiter=";")
     w.writerow(["Artikel", "Grösse", "Anzahl"])
     for row in _summary(items, lines):
-        w.writerow([row["itemName"], row["size"] or "", row["qty"]])
+        w.writerow([_cell(row["itemName"]), _cell(row["size"]), row["qty"]])
     w.writerow([])
     w.writerow(["Mitglied", "Artikel", "Grösse", "Anzahl", "Preis", "Total"])
     for line in sorted(
@@ -1186,9 +1300,9 @@ def order_csv(order_id: int):
         item = by_id.get(line.item_id)
         w.writerow(
             [
-                names.get(line.member_id or 0) or "",
-                item.name if item else "",
-                line.size or "",
+                _cell(names.get(line.member_id or 0)),
+                _cell(item.name if item else ""),
+                _cell(line.size),
                 line.qty,
                 f"{line.price:.2f}",
                 f"{line.price * line.qty:.2f}",
@@ -1206,7 +1320,7 @@ def order_csv(order_id: int):
 @permission_required("orders", "update", "Run collective orders")
 def bill_order(order_id: int):
     member = get_current_member()
-    o, err = _get(KasseOrder, order_id)
+    o, err = _get(KasseOrder, order_id, lock=True)
     if err:
         return err
     if o.status == "billed":
