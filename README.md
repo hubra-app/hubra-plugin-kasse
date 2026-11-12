@@ -1,6 +1,6 @@
 # Kasse
 
-[![Test and release](https://github.com/hubra-app/hubra-plugin-kasse/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/hubra-app/hubra-plugin-kasse/actions/workflows/release.yml?query=branch%3Amain) [![Release](https://img.shields.io/github/v/release/hubra-app/hubra-plugin-kasse)](https://github.com/hubra-app/hubra-plugin-kasse/releases/latest) [![License: all rights reserved](https://img.shields.io/badge/license-all%20rights%20reserved-lightgrey)](LICENSE)
+[![Test and release](https://github.com/hubra-app/hubra-plugin-kasse/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/hubra-app/hubra-plugin-kasse/actions/workflows/release.yml?query=branch%3Amain) [![Release](https://img.shields.io/github/v/release/hubra-app/hubra-plugin-kasse)](https://github.com/hubra-app/hubra-plugin-kasse/releases/latest) [![License: all rights reserved](https://img.shields.io/badge/license-all%20rights%20reserved-lightgrey)](LICENSE) [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-bitsandbricks-ffdd00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/bitsandbricks)
 
 A plugin for [Hubra](https://hubra.club). Money between members and the club outside the membership fee: expense claims with a receipt photo, a drinks and materials tab (Strichliste) with QR codes at the fridge, and collective orders for club clothing. Totals go on the member's invoice.
 
