@@ -4,7 +4,7 @@
 
 A plugin for [Hubra](https://hubra.club). Money between members and the club outside the membership fee: expense claims with a receipt photo, a drinks and materials tab (Strichliste) with QR codes at the fridge, and collective orders for club clothing. Totals go on the member's invoice.
 
-**Version** 1.0.0 · **Works with** Hubra >=0.2,<1 · **Plugin id** `kasse` · **Needs** the members and finance modules, and Hubra's file store for receipts
+**Version** 1.2.0 · **Works with** Hubra >=0.2.6,<1 · **Plugin id** `kasse` · **Needs** the members and finance modules, and Hubra's file store for receipts
 
 ![Tab](docs/screenshots/tab.png)
 
