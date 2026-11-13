@@ -1,7 +1,7 @@
 id: kasse
 name: Kasse
 version: "1.1.0"
-hubra: ">=0.2.5,<1"
+hubra: ">=0.2.6,<1"
 description: "Money between members and the club outside the membership fee: expense claims with a receipt photo, a drinks and materials tab (Strichliste) with QR codes at the fridge, and collective orders for club clothing. Totals go on the member's invoice."
 author: Hubra
 homepage: https://github.com/hubra-app/hubra-plugin-kasse
