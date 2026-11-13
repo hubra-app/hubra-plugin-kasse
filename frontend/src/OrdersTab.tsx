@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ActionIcon, Badge, Button, Group, NumberInput, Paper, SimpleGrid, Stack, Text, TextInput, Textarea } from '@mantine/core'
 import { IconPlus, IconShoppingBag, IconTrash } from '@tabler/icons-react'
-import { EmptyState, ErrorBanner, Field, LoadingSpinner, Modal, useT } from '@hubra/plugin-sdk'
+import { DateField, EmptyState, ErrorBanner, Field, LoadingSpinner, Modal, useT } from '@hubra/plugin-sdk'
 import { QK, errorText, formatDay, listOrders, saveOrder, type Order, type OrderItem, type Options } from './api'
 import { chf, useAction } from './common'
 
@@ -163,7 +163,7 @@ export function OrderModal({ order, onClose, onDone }: { order: Order | null; on
           <TextInput value={v.title} onChange={(e) => set('title', e.currentTarget.value)} placeholder={t('kasse.orders.example')} data-autofocus />
         </Field>
         <Field label={t('kasse.orders.deadline')}>
-          <TextInput type="date" value={v.deadline} onChange={(e) => set('deadline', e.currentTarget.value)} />
+          <DateField value={v.deadline} onChange={(val) => set('deadline', val)} />
         </Field>
       </Group>
       <Field label={t('kasse.orders.supplier')}>

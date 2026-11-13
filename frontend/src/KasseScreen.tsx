@@ -5,6 +5,7 @@ import { ActionIcon, Anchor, Badge, Button, FileInput, Group, NumberInput, Paper
 import { IconCheck, IconPaperclip, IconPlus, IconReceipt, IconShoppingBag, IconTrash, IconBeer, IconX, IconCash } from '@tabler/icons-react'
 import {
   ConfirmModal,
+  DateField,
   EmptyState,
   ErrorBanner,
   Field,
@@ -306,7 +307,7 @@ function ClaimModal({ onClose, onDone }: { onClose: () => void; onDone: () => vo
           />
         </Field>
         <Field label={t('kasse.claims.spentOn')}>
-          <TextInput type="date" value={v.spentOn} max={todayIso()} onChange={(e) => set('spentOn', e.currentTarget.value)} />
+          <DateField value={v.spentOn} max={todayIso()} onChange={(val) => set('spentOn', val)} />
         </Field>
       </Group>
       <Field label={t('kasse.claims.receipt')} hint={t('kasse.claims.receiptHint')}>
@@ -418,7 +419,7 @@ function PayModal({
           />
         </Field>
         <Field label={t('kasse.claims.paidOnField')}>
-          <TextInput type="date" value={paidOn} onChange={(e) => setPaidOn(e.currentTarget.value)} />
+          <DateField value={paidOn} onChange={setPaidOn} />
         </Field>
       </Group>
       <CategoryField value={categoryId} onChange={setCategoryId} options={options} hint={t('kasse.claims.categoryHint')} />
