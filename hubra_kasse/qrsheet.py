@@ -51,8 +51,7 @@ def qr_data_uri(text: str) -> str:
 def sheet(products, link: str, german: bool) -> bytes:
     """*link* ends where the product id goes, e.g. ``https://…/app/kasse/tab?tick=``."""
     from weasyprint import HTML
-
-    from hubra.core.services.qr_bill import _no_fetch
+    from weasyprint.urls import URLFetcher
 
     html = _SHEET.render(
         title="Strichliste" if german else "Tab",
@@ -70,4 +69,7 @@ def sheet(products, link: str, german: bool) -> bytes:
             for p in products
         ],
     )
-    return HTML(string=html, url_fetcher=_no_fetch()).write_pdf()
+    # Self-contained: the codes are data: URIs, nothing else is loaded.
+    return HTML(
+        string=html, url_fetcher=URLFetcher(allowed_protocols={"data"})
+    ).write_pdf()

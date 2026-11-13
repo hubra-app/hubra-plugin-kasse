@@ -6,7 +6,9 @@ in a real club. Hubra applies the member links itself when a member is
 deleted; the rest is done here:
 
 - an invoice deleted (``invoice.deleted``): its ticks go back on the open
-  tab and its order lines are unbilled again, as ``SET NULL`` intended;
+  tab and its order lines are unbilled again, as ``SET NULL`` intended. A
+  tab handed to Finance as an open item is taken back from Finance first,
+  or it would be billed again with the ticks;
 - an order or a product deleted: the routes delete its items and lines, or
   unlink its ticks, themselves;
 - ``purge_orphans`` (daily job) catches what slipped past: links to invoices,
@@ -15,7 +17,7 @@ deleted; the rest is done here:
 
 from __future__ import annotations
 
-from sqlalchemy import delete, exists, select, update
+from sqlalchemy import delete, exists, func, select, update
 
 from hubra.core.extensions import db
 from hubra.core.models.finance import Invoice, Transaction
@@ -30,7 +32,31 @@ from .models import (
 )
 
 
+def tab_ref(member_id: int, last_tick_id: int) -> str:
+    """A settled tab's reference on its open item: the member and the
+    newest tick in it."""
+    return f"tab:{member_id}:{last_tick_id}"
+
+
+def _take_back_items(invoice_ids) -> None:
+    from hubra.core.contracts import SYSTEM, Refused, available, call
+
+    if not available("finance.open_item.remove"):
+        return
+    rows = db.session.execute(
+        select(KasseTick.member_id, func.max(KasseTick.id))
+        .where(KasseTick.invoice_id.in_(invoice_ids), KasseTick.member_id.isnot(None))
+        .group_by(KasseTick.member_id, KasseTick.invoice_id)
+    ).all()
+    for member_id, last in rows:
+        try:
+            call("finance.open_item.remove", source_ref=tab_ref(member_id, last), actor=SYSTEM)
+        except Refused:
+            pass  # on another invoice already: it stays there
+
+
 def _unbill(invoice_ids) -> int:
+    _take_back_items(invoice_ids)
     ticks = db.session.execute(
         update(KasseTick)
         .where(KasseTick.invoice_id.in_(invoice_ids))
