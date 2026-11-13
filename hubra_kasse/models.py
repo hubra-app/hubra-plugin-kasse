@@ -97,7 +97,9 @@ class KasseTick(db.Model):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, nullable=False
     )
-    # Set once the tab is settled; the tick is then on that invoice.
+    # Set once the tab is settled (settled_at). invoice_id: the invoice it is
+    # on, when Finance billed it at once; handed over as an open item for a
+    # collected invoice it stays empty.
     invoice_id: Mapped[int | None] = mapped_column(Integer, _invoice_fk(), index=True)
     settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

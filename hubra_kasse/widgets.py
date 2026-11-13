@@ -32,7 +32,7 @@ def tab(ctx, config: dict) -> dict:
     total, ticks = db.session.execute(
         select(func.coalesce(func.sum(KasseTick.price * KasseTick.qty), 0), func.count())
         .where(KasseTick.member_id == ctx.actor.id)
-        .where(KasseTick.invoice_id.is_(None))
+        .where(KasseTick.settled_at.is_(None))
     ).one()
     word = ("Strich", "Striche") if _german(ctx.actor) else ("tick", "ticks")
     sub = f"{ticks} {word[ticks != 1]}"

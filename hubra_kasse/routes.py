@@ -66,6 +66,7 @@ from .models import (
     KasseTick,
 )
 from . import items as inventory
+from .links import tab_ref
 from .notify import notify
 
 kasse_bp = Blueprint("kasse_bp", __name__)
@@ -318,7 +319,7 @@ def _tick(t: KasseTick, me: int, can_tab: bool, now: datetime) -> dict:
         "qty": t.qty,
         "total": _num(t.price * t.qty),
         "createdAt": _iso(t.created_at),
-        "canUndo": t.invoice_id is None
+        "canUndo": t.settled_at is None
         and (can_tab or (t.member_id == me and now - created <= UNDO)),
     }
 
@@ -781,7 +782,7 @@ def _open_ticks(member_id: int) -> list[KasseTick]:
         db.session.scalars(
             select(KasseTick)
             .where(KasseTick.member_id == member_id)
-            .where(KasseTick.invoice_id.is_(None))
+            .where(KasseTick.settled_at.is_(None))
             .order_by(KasseTick.created_at.desc())
         )
     )
@@ -858,8 +859,8 @@ def untick(tick_id: int):
     if err:
         return err
     can_tab = _can(member, TAB)
-    if row.invoice_id is not None:
-        return api_error("TICK_SETTLED", "this tick is on an invoice already", 409)
+    if row.settled_at is not None:
+        return api_error("TICK_SETTLED", "this tick is settled already", 409)
     created = (
         row.created_at
         if row.created_at.tzinfo
@@ -891,7 +892,7 @@ def _open_totals() -> list[tuple[int, Decimal, int]]:
             func.sum(KasseTick.price * KasseTick.qty),
             func.sum(KasseTick.qty),
         )
-        .where(KasseTick.invoice_id.is_(None))
+        .where(KasseTick.settled_at.is_(None))
         .where(KasseTick.member_id.isnot(None))
         .group_by(KasseTick.member_id)
     ).all()
@@ -936,6 +937,35 @@ def _invoice(
     return db.session.get(Invoice, made["id"])
 
 
+def _hand_over(
+    member_id: int,
+    amount: Decimal,
+    text: str,
+    ticks: list[KasseTick],
+    data: dict,
+    actor: int,
+) -> int | None:
+    """The member's tab as an open item for Finance: on their next
+    collected invoice, or billed at once when the club doesn't collect
+    (then its invoice id comes back)."""
+    from hubra.core.contracts import SYSTEM, call
+
+    # The ticks are locked: the newest one names this settlement.
+    made = call(
+        "finance.open_item.add",
+        member_id=member_id,
+        amount=amount,
+        text=text[:200],
+        source_ref=tab_ref(member_id, max(t.id for t in ticks)),
+        category_id=_category_id(data),
+        # Billed at once (the club doesn't collect): due as the tab says.
+        due_days=_int(data, "dueDays", 0, 365, 30),
+        actor_id=actor,
+        actor=SYSTEM,
+    )
+    return made.get("invoice_id")
+
+
 def _tab_settings() -> dict:
     from hubra.core.modules import get_config
 
@@ -973,6 +1003,8 @@ def put_tab_settings():
 @kasse_bp.post("/tab/settle")
 @permission_required("tab", "update", "Manage the tab and settle it")
 def settle_tab():
+    from hubra.core.contracts import available
+
     member = get_current_member()
     # What the settle form leaves out comes from the Strichliste's settings.
     data = {**_tab_settings(), **{k: v for k, v in _body().items() if v is not None}}
@@ -986,7 +1018,7 @@ def settle_tab():
     per_member: dict[int, list[KasseTick]] = defaultdict(list)
     for t in db.session.scalars(
         select(KasseTick)
-        .where(KasseTick.invoice_id.is_(None))
+        .where(KasseTick.settled_at.is_(None))
         .where(KasseTick.member_id.isnot(None))
         .order_by(KasseTick.id)
         .with_for_update()
@@ -997,15 +1029,17 @@ def settle_tab():
         amount = sum((t.price * t.qty for t in ticks), Decimal("0"))
         if amount <= 0 or db.session.get(Member, member_id) is None:
             continue
-        invoice = _invoice(
-            member_id, amount, f"{label} bis {now:%d.%m.%Y}", data, member.id
-        )
+        text = f"{label} bis {now:%d.%m.%Y}"
+        if available("finance.open_item.add"):
+            invoice_id = _hand_over(member_id, amount, text, ticks, data, member.id)
+        else:  # a Hubra without open items (before 0.2.6)
+            invoice_id = _invoice(member_id, amount, text, data, member.id).id
         for t in ticks:
-            t.invoice_id = invoice.id
+            t.invoice_id = invoice_id
             t.settled_at = now
         count += 1
         total += amount
-    log_audit(member.id, "kasse.tab.settle", "KasseTick", None, f"{count} invoices")
+    log_audit(member.id, "kasse.tab.settle", "KasseTick", None, f"{count} members")
     db.session.commit()
     return jsonify({"invoices": count, "total": _num(total)})
 

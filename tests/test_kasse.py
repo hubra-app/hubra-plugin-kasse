@@ -608,6 +608,49 @@ def test_a_deleted_invoice_puts_its_ticks_back_on_the_tab(client, db, club):
     # Open again (on Postgres in tests the foreign key nulls it first).
     assert tick.invoice_id is None
     assert client.get(f"{BASE}/tab/members").get_json()["members"][0]["total"] == 4.0
+    # Its open item is taken back from Finance, so it isn't billed twice.
+    assert _tab_items(db) == []
+
+
+def _tab_items(db) -> list:
+    from hubra.core.models.finance import OpenItem
+
+    db.session.expire_all()
+    return list(db.session.scalars(select(OpenItem).where(OpenItem.source == "kasse")))
+
+
+def test_a_collecting_club_gets_the_tab_on_its_statement(client, db, club, monkeypatch):
+    """With Finanzen › Kleine Posten sammeln on, a settled tab waits as an
+    open item for the member's next collected invoice."""
+    import hubra.core.modules as modules
+    from hubra.core.models.finance import Invoice
+    from hubra_kasse.models import KasseTick
+
+    real = modules.get_config
+
+    def get_config(code, *a, **kw):
+        conf = dict(real(code, *a, **kw))
+        if code == "finance":
+            conf.update(collect_items="monthly", collect_min_amount=0)
+        return conf
+
+    monkeypatch.setattr(modules, "get_config", get_config)
+    _login(client, "kim@test.ch")
+    beer = client.post(f"{BASE}/products", json={"name": "Bier", "price": "4"}).get_json()
+    client.post(f"{BASE}/tab", json={"productId": beer["id"], "memberId": club["max"], "qty": 3})
+    done = client.post(f"{BASE}/tab/settle", json={"categoryId": club["cat"]}).get_json()
+    assert done == {"invoices": 1, "total": 12.0}
+    assert db.session.scalars(select(Invoice)).all() == []
+    (item,) = _tab_items(db)
+    assert item.member_id == club["max"] and float(item.amount) == 12.0
+    assert item.invoice_id is None and item.category_id == club["cat"]
+    assert item.text.startswith("Strichliste bis ")
+    # The ticks are settled: off the tab, and can't be taken back.
+    tick = db.session.scalar(select(KasseTick).where(KasseTick.member_id == club["max"]))
+    assert tick.settled_at is not None and tick.invoice_id is None
+    assert client.get(f"{BASE}/tab/members").get_json()["members"] == []
+    assert client.delete(f"{BASE}/tab/{tick.id}").status_code == 409
+    assert client.post(f"{BASE}/tab/settle", json={}).get_json()["invoices"] == 0
 
 
 def test_purge_orphans_clears_links_to_rows_that_are_gone(db, club):

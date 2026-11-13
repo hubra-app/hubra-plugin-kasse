@@ -84,6 +84,9 @@ module = Module(
     # Hubra's features it uses, through contracts (docs/contracts.md in hubra).
     consumes={
         "finance.invoice.create": ">=1,<2",
+        # The settled tab goes to Finance as an open item.
+        "finance.open_item.add": ">=1,<2",
+        "finance.open_item.remove": ">=1,<2",
         "finance.transaction.create": ">=1,<2",
         "inventory.items.get": ">=1,<2",
         "inventory.items.save": ">=1,<2",
