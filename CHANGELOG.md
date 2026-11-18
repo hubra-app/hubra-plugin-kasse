@@ -1,5 +1,9 @@
 # Kasse
 
+## Unreleased
+
+- Date, date-and-time and time fields use Hubra's date pickers: dd.mm.yyyy, a calendar that starts on Monday and 24-hour times, whatever the browser language; typed dates like 1.2.26 work too. Needs Hubra 0.2.6 or later.
+
 ## 1.2.0
 
 - **The Strichliste goes to Finanzen as open items**: settling hands each member's open amount over with `finance.open_item.add` (hubra#337). With Finanzen › Einstellungen › Kleine Posten sammeln on, it waits for the member's next collected invoice, together with booking fees and the rest; with it off it gets an invoice of its own straight away, as before, due after the Strichliste's payment term. A deleted invoice puts its ticks back on the tab and takes the open item back, so nothing is billed twice. A settled tick is one with a settle date (it may have no invoice yet). On a Hubra without open items it invoices as before. Needs Hubra 0.2.6 or later for open items.
